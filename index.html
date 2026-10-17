@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Sky Roadster</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="bg"></div>
+<canvas id="c"></canvas>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div class="hud-left"><div id="hudStage">STAGE 1</div><div id="hudCity">SEOUL</div></div>
+  <div class="hud-mid">
+    <div id="progress"><div id="progFill"></div><div id="progCar">▲</div></div>
+    <div id="hudDest">목적지</div>
+  </div>
+  <div class="hud-right"><div id="hudScore">0</div><div id="hudLives">❤❤❤</div></div>
+</div>
+<div id="hint" class="hidden"></div>
+<div id="banner" class="hidden"></div>
+<button id="muteBtn" title="소리 (M)">🔊</button>
+
+<!-- Title -->
+<div id="title" class="overlay">
+  <div class="panel">
+    <div class="logo">SKY<span>ROADSTER</span></div>
+    <div class="sub">꽉 막힌 도로는 이제 그만 — 하늘길 월드 투어</div>
+    <div id="cities"></div>
+    <button id="startBtn" class="btn">START ▶</button>
+    <div class="help">
+      <b>이동</b> ← → ↑ ↓ / WASD · 화면 드래그 &nbsp; <b>이륙</b> Space · 클릭 &nbsp; <b>일시정지</b> P
+    </div>
+    <div class="help">🟡 링을 통과하면 점수 · 표지판, 새, 드론, 열기구를 피하세요</div>
+    <div id="best" class="help"></div>
+  </div>
+</div>
+
+<!-- Stage clear / game over -->
+<div id="result" class="overlay hidden">
+  <div class="panel">
+    <div id="resTitle" class="logo small">STAGE CLEAR</div>
+    <div id="resText" class="sub"></div>
+    <button id="resBtn" class="btn">NEXT ▶</button>
+    <button id="resBtn2" class="btn ghost">타이틀로</button>
+  </div>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

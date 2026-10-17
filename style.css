@@ -1,0 +1,59 @@
+:root { --accent: #ff3b3b; --cyan: #7fe3ff; --ink: #fff; --panel: rgba(8, 10, 18, .72); }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #05060a; color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; user-select: none; }
+#bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: transparent center top / 100% 100% no-repeat;
+  transform-origin: 0 0; will-change: transform; }
+#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.hidden { display: none !important; }
+
+#hud { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; padding: 14px 16px; pointer-events: none; text-shadow: 0 2px 6px rgba(0,0,0,.7); }
+.hud-left, .hud-right { min-width: 110px; }
+.hud-right { text-align: right; }
+#hudStage { font-size: 12px; letter-spacing: .2em; opacity: .8; }
+#hudCity { font-size: 22px; font-weight: 800; letter-spacing: .06em; }
+#hudScore { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+#hudLives { color: var(--accent); font-size: 18px; letter-spacing: 2px; }
+.hud-mid { flex: 1; max-width: 420px; text-align: center; }
+#progress { position: relative; height: 8px; margin-top: 8px; border-radius: 99px; background: rgba(255,255,255,.18); }
+#progFill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--cyan), #fff); }
+#progCar { position: absolute; top: -13px; left: 0; transform: translateX(-50%) rotate(90deg); font-size: 14px; color: #fff; }
+#hudDest { margin-top: 6px; font-size: 13px; opacity: .9; }
+
+#hint, #banner { position: fixed; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none;
+  text-shadow: 0 2px 8px rgba(0,0,0,.8); }
+#hint { bottom: 9%; font-size: 18px; font-weight: 600; padding: 10px 18px; border-radius: 99px; background: rgba(0,0,0,.35);
+  animation: pulse 1.4s ease-in-out infinite; white-space: nowrap; }
+#banner { top: 28%; font-size: clamp(28px, 6vw, 56px); font-weight: 900; letter-spacing: .08em; }
+#banner small { display: block; font-size: .35em; font-weight: 600; letter-spacing: .2em; opacity: .85; }
+@keyframes pulse { 50% { opacity: .55; } }
+
+#muteBtn { position: fixed; right: 12px; bottom: 12px; width: 40px; height: 40px; border-radius: 50%; border: 0;
+  background: rgba(0,0,0,.4); color: #fff; font-size: 18px; cursor: pointer; }
+
+.overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,.15), rgba(0,0,0,.75)); }
+#title { background: linear-gradient(180deg, rgba(4,6,14,.2), rgba(4,6,14,.85)), #05060a url(assets/title.jpg) center / cover no-repeat; }
+.panel { width: min(560px, 100%); text-align: center; padding: 28px 22px; border-radius: 18px; background: var(--panel);
+  backdrop-filter: blur(6px); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.logo { font-size: clamp(38px, 9vw, 64px); font-weight: 900; letter-spacing: .04em; line-height: 1; font-style: italic; }
+.logo span { color: var(--accent); margin-left: .2em; }
+.logo.small { font-size: clamp(30px, 7vw, 46px); }
+.sub { margin: 12px 0 18px; opacity: .9; line-height: 1.6; }
+#cities { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-bottom: 20px; }
+#cities span { font-size: 12px; padding: 4px 10px; border-radius: 99px; background: rgba(255,255,255,.1); letter-spacing: .08em; }
+#cities span.done { background: var(--cyan); color: #000; }
+.btn { display: inline-block; font: inherit; font-size: 18px; font-weight: 800; letter-spacing: .1em; color: #fff; cursor: pointer;
+  padding: 12px 34px; border: 0; border-radius: 99px; background: var(--accent); box-shadow: 0 6px 20px rgba(255,59,59,.4); margin: 4px; }
+.btn:hover { filter: brightness(1.1); }
+.btn.ghost { background: transparent; box-shadow: none; border: 1px solid rgba(255,255,255,.35); font-size: 14px; padding: 10px 22px; }
+.help { margin-top: 14px; font-size: 13px; opacity: .75; line-height: 1.6; }
+.help b { color: var(--cyan); font-weight: 600; }
+
+@media (max-width: 600px) {
+  #hud { padding: 10px 12px; }
+  .hud-left, .hud-right { min-width: 80px; }
+  #hudCity, #hudScore { font-size: 17px; }
+  #hint { font-size: 15px; }
+}
