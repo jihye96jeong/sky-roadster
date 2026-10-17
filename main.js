@@ -461,6 +461,10 @@ function liftoff() {
   Sfx.init(); Sfx.tone(80, 400, 1.6, 'sawtooth', .08); Sfx.noise(1.2, .15);
   setState('liftoff');
 }
+const GRAVITY = 24;
+function crashDust() {
+  for (let i = 0; i < 30; i++) emit(car.position.x + rand(-1.2, 1.2), .3, rand(-2, 2), rand(-9, 9), rand(.5, 3), rand(-6, 6), 1.6, 1.4);
+}
 function hit() {
   G.lives--; G.inv = 1.6; G.shake = .6; G.combo = 0;
   Sfx.noise(.35, .4); Sfx.tone(220, 60, .4, 'square', .12);
@@ -483,9 +487,16 @@ function stageClear() {
 }
 function gameOver() {
   setState('over'); saveBest();
+  // 도로 위로 추락: 살짝 튀어오른 뒤 한 바퀴 돌며 떨어져 노면에 착지. 착지 지점의 정체 차량은 비켜둠
+  G.vy = 3; G.landed = false;
+  const fallT = (G.vy + Math.sqrt(G.vy * G.vy + 2 * GRAVITY * car.position.y)) / GRAVITY;
+  G.spin = Math.PI * 2 / fallT; G.spinTo = car.rotation.z + Math.PI * 2;
+  G.inv = 0; car.visible = true; // 깜빡임 중이어도 추락 장면은 항상 보이게
+  // 착지할 차선 구간(감속 중 밀려오는 거리 포함)을 비워 카메라에서 가리지 않게
+  for (const tr of traffic) if (Math.abs(tr.x - car.position.x) < 2.8 && tr.z > -16 && tr.z < 13) tr.z -= SPAN * .5;
   showBanner('CRASH!', 1.2);
   setTimeout(() => showResult('GAME OVER', `${G.stage.name} · ${Math.round(G.dist / G.len * 100)}% 지점<br>점수 <b>${Math.floor(G.score).toLocaleString()}</b> · 최고 ${Math.floor(G.best).toLocaleString()}`,
-    '이 스테이지 다시 ▶', () => { G.score = G.stageStartScore; setStage(G.stageIdx); }), 1300);
+    '이 스테이지 다시 ▶', () => { G.score = G.stageStartScore; setStage(G.stageIdx); }), 2200); // 착지 장면을 본 뒤 결과창
 }
 function saveBest() { if (G.score > G.best) { G.best = G.score; store.set('skyroadster.best', G.best); } }
 function showResult(title, text, btn, onNext) {
@@ -579,13 +590,21 @@ function update(dt) {
   } else if (G.state === 'clear') {
     G.speed *= 1 - dt * .8; target.y = Math.min(MAX_Y + 4, target.y + dt * 4);
   } else if (G.state === 'over') {
-    G.speed *= 1 - dt * 2; target.y -= dt * 3; car.rotation.z += dt * 3;
+    G.speed *= 1 - Math.min(1, dt * 6); // 세상이 빠르게 멈춤
+    if (!G.landed) {
+      G.vy -= GRAVITY * dt; car.position.y += G.vy * dt;
+      car.rotation.z = Math.min(G.spinTo, car.rotation.z + G.spin * dt);
+      if (car.position.y <= 0) { // 노면 충돌 → 작게 한 번 튀고 정지
+        car.position.y = 0; car.rotation.z = G.spinTo;
+        if (G.vy < -5) { G.vy *= -.28; G.shake = .5; Sfx.noise(.3, .3); crashDust(); } else { G.vy = 0; G.landed = true; }
+      }
+    } else car.rotation.z += (G.spinTo + .05 - car.rotation.z) * Math.min(1, dt * 6); // 살짝 기운 채 멈춤
   }
 
   // 차량 이동 / 기울기
   if (G.state === 'fly' || G.state === 'clear' || G.state === 'over') {
     const px = car.position.x, py = car.position.y, f = Math.min(1, dt * 6);
-    car.position.x += (target.x - px) * f; car.position.y += (target.y - py) * f;
+    car.position.x += (target.x - px) * f; if (G.state !== 'over') car.position.y += (target.y - py) * f;
     const vx = (car.position.x - px) / dt, vy = (car.position.y - py) / dt;
     if (G.state !== 'over') { car.rotation.z += (-vx * .035 - car.rotation.z) * f; car.rotation.x += (vy * .02 - car.rotation.x) * f; car.rotation.y = -vx * .01; }
     if (G.state !== 'over') { setJets(1, .35 + G.speed / 400, t); jetSteam(.5, 1, 1, 1.5); } else setJets(Math.max(0, 1 - G.stateT), .3, t);
@@ -674,4 +693,5 @@ renderTitle();
 requestAnimationFrame(loop);
 // 디버그용: 콘솔에서 __dbg.step(초) 로 프레임 수동 진행
 window.__G = G;
+window.__crash = () => gameOver();
 window.__dbg = { step(sec, dt = 1 / 30) { for (let i = 0; i < sec / dt; i++) update(dt); renderer.render(scene, camera); }, target, car };
