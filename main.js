@@ -12,7 +12,7 @@ const STAGES = [
   { id: 'newyork', name: 'NEW YORK', dest: '엠파이어 스테이트',   hz: .955, signs: ['Broadway', 'Times Sq', 'Brooklyn Br', '5th Ave'],                     mix: { sign: 3, bird: 3, drone: 3, balloon: 2 } },
 ];
 // 비행 고도: 정체된 차 지붕(~2.3m) 바로 위를 낮게 난다
-const SPAWN_Z = -260, BOUND_X = 10, MIN_Y = 3, MAX_Y = 12, LIFT_Y = 4.2;
+const SPAWN_Z = -260, MIN_Y = 3, MAX_Y = 12, LIFT_Y = 5, THRUST = 26, FALL = 17;
 
 const $ = s => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -309,9 +309,8 @@ function makeBirds(x, y) {
     const b = photoMesh(kind, 1.9, true); b.position.set(ox, oy, oz); b.userData.ph = rand(0, 6);
     g.add(b); birds.push(b); boxes.push([ox, oy, oz, .8, .35, .5]);
   }
-  const vx = rand(-4, 4);
   return { kind: 'bird', g, boxes, tick(dt, t) {
-    g.position.x += vx * dt; g.position.y += Math.sin(t * 2) * dt;
+    g.position.y += Math.sin(t * 2) * dt;
     for (const b of birds) { const c = texCache[b.userData.photo]; const f = Math.sin(t * 12 + b.userData.ph); // 날갯짓: 세로로 살짝 찌그러뜨려 흉내
       b.scale.set(1.9 * (1 - Math.abs(f) * .12), 1.9 * (c.aspect || .4) * (1 + f * .35), 1); b.rotation.z = f * .05; }
   } };
@@ -319,10 +318,10 @@ function makeBirds(x, y) {
 function makeDrone(x, y) {
   const g = new THREE.Group(); g.position.set(x, y, SPAWN_Z);
   const d = photoMesh('obs_drone', 2.8, true); g.add(d);
-  const x0 = x, ph = rand(0, 6), amp = rand(1.5, 4);
+  const y0 = y, ph = rand(0, 6), amp = rand(.8, 1.8);
   return { kind: 'drone', g, boxes: [[0, 0, 0, 1.4, .5, .8]], tick(dt, t) {
-    g.position.x = x0 + Math.sin(t * 1.6 + ph) * amp; g.position.y += Math.cos(t * 3 + ph) * dt * 1.5;
-    d.rotation.z = Math.cos(t * 1.6 + ph) * .12; // 좌우로 움직일 때 기울기
+    g.position.y = y0 + Math.sin(t * 1.6 + ph) * amp; // 위아래로 천천히 오르내림
+    d.rotation.z = Math.sin(t * 3 + ph) * .05;
   } };
 }
 function makeBalloon(x, y) {
@@ -355,17 +354,18 @@ function spawnWave(stage) {
   const mix = stage.mix, total = mix.sign + mix.bird + mix.drone + mix.balloon;
   let r = Math.random() * total, kind = 'sign';
   for (const k of ['sign', 'bird', 'drone', 'balloon']) { if ((r -= mix[k]) < 0) { kind = k; break; } }
-  // 40% 확률로 현재 플레이어 위치를 노림 → 피하는 맛
-  const aim = Math.random() < .4;
-  const x = aim ? car.position.x + rand(-2, 2) : rand(-BOUND_X, BOUND_X);
-  const y = aim ? car.position.y + rand(-1.5, 1.5) : rand(MIN_Y, MAX_Y);
+  // 원버튼 게임: 장애물은 모두 비행 경로(x≈0) 위에, 높이만 달라서 위/아래로 피한다
+  // 40% 확률로 현재 높이를 노림 → 높이 조절하는 맛
+  const x = rand(-.8, .8);
+  const y = Math.random() < .4 ? car.position.y + rand(-1, 1) : rand(MIN_Y, MAX_Y);
   let o;
-  if (kind === 'sign') o = makeSign(clamp(x, -7, 7), clamp(y, MIN_Y + .5, MAX_Y - 2), stage.signs[(Math.random() * stage.signs.length) | 0]);
-  else if (kind === 'bird') o = makeBirds(x, y);
-  else if (kind === 'drone') o = makeDrone(x, y);
-  else o = makeBalloon(x, clamp(y, MIN_Y + 2, MAX_Y));
+  if (kind === 'sign') o = makeSign(x, clamp(y, MIN_Y + 1, MAX_Y - 1.5), stage.signs[(Math.random() * stage.signs.length) | 0]);
+  else if (kind === 'bird') o = makeBirds(x, clamp(y, MIN_Y + .5, MAX_Y));
+  else if (kind === 'drone') o = makeDrone(x, clamp(y, MIN_Y + .5, MAX_Y));
+  else o = makeBalloon(x, Math.random() < .5 ? rand(5.8, 6.4) : rand(10.8, 11.6)); // 낮은 풍선은 위로, 높은 풍선은 아래로 통과 (항상 길이 남게)
   addObs(o);
-  if (Math.random() < .45) addObs(makeRing(rand(-BOUND_X + 2, BOUND_X - 2), rand(MIN_Y + 1, MAX_Y - 1)), rand(8, 14));
+  // 링은 장애물 반대쪽 높이에 → 피하면서 먹는 동선
+  if (Math.random() < .5) addObs(makeRing(0, clamp(y > (MIN_Y + MAX_Y) / 2 ? y - rand(4, 6) : y + rand(4, 6), MIN_Y + .8, MAX_Y - .5)), rand(10, 16));
 }
 function addObs(o, dz = 0) { o.g.position.z += dz; scene.add(o.g); obstacles.push(o); }
 
@@ -424,7 +424,6 @@ const G = {
   t: 0, stateT: 0, inv: 0, shake: 0, camBlend: 0, combo: 0, best: store.get('skyroadster.best', 0),
 };
 const target = new THREE.Vector2(0, 6);
-const keys = new Set();
 
 function setStage(i, keepScore = true) {
   G.stageIdx = i; G.stage = STAGES[i];
@@ -438,7 +437,7 @@ function setStage(i, keepScore = true) {
   applyFog(G.stage);
   // 교통 체증 위에서 시작
   ground.material.map = groundTex[G.stage.id]; ground.material.needsUpdate = true;
-  car.position.set(0, 0, 0); car.rotation.set(0, 0, 0); target.set(0, LIFT_Y);
+  car.position.set(0, 0, 0); car.rotation.set(0, 0, 0); target.set(0, LIFT_Y); G.vy = 0;
   setJets(0, 0, 0);
   $('#hudStage').textContent = `STAGE ${i + 1}${G.lap ? ' · LAP ' + (G.lap + 1) : ''}`;
   $('#hudCity').textContent = G.stage.name; $('#hudDest').textContent = '목적지 · ' + G.stage.dest;
@@ -449,7 +448,7 @@ function setState(s) {
   hint.classList.toggle('hidden', s !== 'intro');
   hud.classList.toggle('hidden', s === 'title');
   if (s === 'intro') {
-    hint.textContent = innerWidth < 700 ? '탭해서 이륙! 🚀' : 'SPACE / 클릭으로 이륙! 🚀';
+    hint.textContent = innerWidth < 700 ? '화면을 누르고 있으면 상승! 🚀' : 'SPACE 누르고 있으면 상승 · 떼면 하강 🚀';
     showBanner(`${G.stage.name}<small>꽉 막힌 도로… 하늘로 가자</small>`, 2.2);
   }
 }
@@ -520,27 +519,19 @@ function togglePause(force) {
 }
 
 // ---------------------------------------------------------------- 입력
+// 조작은 하나: Space(또는 화면 누르기)를 누르고 있으면 상승, 떼면 하강
+let holding = false;
+function press() { Sfx.init(); if (paused) { togglePause(false); return; } holding = true; liftoff(); }
 addEventListener('keydown', e => {
-  keys.add(e.code);
-  if (e.code === 'Space') { e.preventDefault(); if (paused) togglePause(false); else liftoff(); }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) press(); }
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
   if (e.code === 'KeyM') toggleMute();
 });
-addEventListener('keyup', e => keys.delete(e.code));
-let drag = null;
-canvas.addEventListener('pointerdown', e => {
-  Sfx.init();
-  if (paused) { togglePause(false); return; }
-  if (G.state === 'intro') liftoff();
-  drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId);
-});
-canvas.addEventListener('pointermove', e => {
-  if (!drag) return;
-  target.x += (e.clientX - drag.x) / innerWidth * 30; target.y -= (e.clientY - drag.y) / innerHeight * 20;
-  drag.x = e.clientX; drag.y = e.clientY;
-});
-const endDrag = () => { drag = null; };
-canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+addEventListener('keyup', e => { if (e.code === 'Space') holding = false; });
+canvas.addEventListener('pointerdown', e => { press(); canvas.setPointerCapture(e.pointerId); });
+const release = () => { holding = false; };
+canvas.addEventListener('pointerup', release); canvas.addEventListener('pointercancel', release);
+addEventListener('blur', release);
 document.addEventListener('visibilitychange', () => { if (document.hidden) togglePause(true); });
 function toggleMute() { Sfx.muted = !Sfx.muted; $('#muteBtn').textContent = Sfx.muted ? '🔇' : '🔊'; }
 $('#muteBtn').onclick = toggleMute;
@@ -578,9 +569,12 @@ function update(dt) {
     if (k >= 1) { setState('fly'); showBanner(`GO!<small>${G.stage.dest}까지 날아가자</small>`, 1.3); }
   } else if (G.state === 'fly') {
     // 입력
-    const ix = (keys.has('ArrowRight') || keys.has('KeyD')) - (keys.has('ArrowLeft') || keys.has('KeyA'));
-    const iy = (keys.has('ArrowUp') || keys.has('KeyW')) - (keys.has('ArrowDown') || keys.has('KeyS'));
-    target.x = clamp(target.x + ix * 22 * dt, -BOUND_X, BOUND_X); target.y = clamp(target.y + iy * 16 * dt, MIN_Y, MAX_Y);
+    // 누르고 있으면 추력 > 중력 → 상승, 떼면 하강 (속도 제한으로 부드럽게)
+    G.vy = clamp(G.vy + (holding ? THRUST : -FALL) * dt, -9, 8);
+    car.position.y += G.vy * dt;
+    if (car.position.y < MIN_Y) { car.position.y = MIN_Y; G.vy = Math.max(0, G.vy); }   // 차 지붕 위 최저 고도
+    if (car.position.y > MAX_Y) { car.position.y = MAX_Y; G.vy = Math.min(0, G.vy); }
+    target.y = car.position.y;
     G.speed += (G.targetSpeed - G.speed) * Math.min(1, dt * 2);
     G.dist += G.speed * dt; G.score += Math.round(G.speed * dt * .2 * 10) / 10;
     // 스폰
@@ -604,9 +598,9 @@ function update(dt) {
   // 차량 이동 / 기울기
   if (G.state === 'fly' || G.state === 'clear' || G.state === 'over') {
     const px = car.position.x, py = car.position.y, f = Math.min(1, dt * 6);
-    car.position.x += (target.x - px) * f; if (G.state !== 'over') car.position.y += (target.y - py) * f;
+    if (G.state === 'clear') car.position.y += (target.y - py) * f;
     const vx = (car.position.x - px) / dt, vy = (car.position.y - py) / dt;
-    if (G.state !== 'over') { car.rotation.z += (-vx * .035 - car.rotation.z) * f; car.rotation.x += (vy * .02 - car.rotation.x) * f; car.rotation.y = -vx * .01; }
+    if (G.state !== 'over') { car.rotation.z += (Math.sin(t * 1.7) * .02 - car.rotation.z) * f; car.rotation.x += (vy * .025 - car.rotation.x) * f; } // 상승 시 기수 들림
     if (G.state !== 'over') { setJets(1, .35 + G.speed / 400, t); jetSteam(.5, 1, 1, 1.5); } else setJets(Math.max(0, 1 - G.stateT), .3, t);
     car.visible = G.inv <= 0 || (t * 12 | 0) % 2 === 0;
   }
@@ -694,4 +688,4 @@ requestAnimationFrame(loop);
 // 디버그용: 콘솔에서 __dbg.step(초) 로 프레임 수동 진행
 window.__G = G;
 window.__crash = () => gameOver();
-window.__dbg = { step(sec, dt = 1 / 30) { for (let i = 0; i < sec / dt; i++) update(dt); renderer.render(scene, camera); }, target, car };
+window.__dbg = { step(sec, dt = 1 / 30) { for (let i = 0; i < sec / dt; i++) update(dt); renderer.render(scene, camera); }, target, car, hold: v => { holding = v; } };
