@@ -84,25 +84,70 @@ const shadowMat = new THREE.MeshBasicMaterial({ map: softTex, color: 0x000000, t
 const shadowGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 function groundShadow(w, d) { const s = new THREE.Mesh(shadowGeo, shadowMat); s.scale.set(w, 1, d); s.position.y = .03; return s; }
 
+// ---------------------------------------------------------------- 증기 분사 셰이더 (스크롤 노이즈 + 가장자리/길이 감쇠)
+const JET_LEN = 3.8;
+function jetMaterial(color, strength, additive) {
+  return new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 }, uPower: { value: 0 }, uColor: { value: new THREE.Color(color) }, uStrength: { value: strength } },
+    vertexShader: `varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+      void main(){ vUv = uv; vN = normalMatrix * normal; vec4 mv = modelViewMatrix * vec4(position, 1.); vV = -mv.xyz; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform float uTime, uPower, uStrength; uniform vec3 uColor; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+      float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+        return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
+      void main(){
+        float along = 1. - vUv.y;                                  // 0 = 노즐, 1 = 끝
+        float edge = pow(abs(dot(normalize(vN), normalize(vV))), 1.6); // 원기둥 가장자리는 투명
+        float t = n(vec2(vUv.x * 9., along * 5. - uTime * 7.)) * .6 + n(vec2(vUv.x * 23., along * 13. - uTime * 13.)) * .4;
+        float a = edge * smoothstep(1., .1, along) * smoothstep(0., .03, along) * (.45 + .9 * t) * uPower * uStrength;
+        gl_FragColor = vec4(uColor * (1. + (1. - along) * .8), a);
+      }`,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+  });
+}
+const JET = {
+  outerGeo: new THREE.CylinderGeometry(.17, .6, JET_LEN, 18, 1, true).translate(0, -JET_LEN / 2, 0), // 아래로 퍼지는 증기
+  coreGeo: new THREE.CylinderGeometry(.07, .2, JET_LEN * .6, 12, 1, true).translate(0, -JET_LEN * .275, 0), // 밝은 심
+  outer: jetMaterial(0xe8f3ff, .75, false),
+  core: jetMaterial(0xa9dcff, 1.3, true),
+  glowMat: new THREE.SpriteMaterial({ map: softTex, color: 0xcfeeff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
+};
+const _tip = new THREE.Vector3();
+// power 0~1, sweep: 전진 속도에 따라 증기가 뒤로 휨
+function setJets(power, sweep, t) {
+  JET.outer.uniforms.uTime.value = JET.core.uniforms.uTime.value = t;
+  JET.outer.uniforms.uPower.value = JET.core.uniforms.uPower.value = power;
+  JET.glowMat.opacity = power;
+  const flick = 1 + Math.sin(t * 40) * .03 + Math.random() * .04;
+  for (const j of car.userData.jets) {
+    j.visible = power > .01;
+    j.scale.set(.85 + power * .15, (.35 + power * .65) * flick, .85 + power * .15);
+    j.rotation.x = -sweep;
+  }
+}
+// 분사 끝에서 하얀 증기 뭉게뭉게 (월드 좌표)
+function jetSteam(prob, size, life, spread) {
+  car.updateMatrixWorld();
+  for (const j of car.userData.jets) {
+    if (Math.random() > prob) continue;
+    _tip.set(rand(-.3, .3), -JET_LEN * .8 * j.scale.y, 0); j.localToWorld(_tip);
+    emit(_tip.x, _tip.y, _tip.z, rand(-spread, spread), rand(-2.5, -.5), rand(-spread, spread) * .6 + 2, size, life);
+  }
+}
+
 function buildRoadster() {
   const car = new THREE.Group();
   const photo = photoMesh('car_player', 2.6); // 레퍼런스 사진 기반으로 생성한 로드스터 후면
   car.add(photo);
   const sh = groundShadow(3.2, 5); car.add(sh); car.userData.shadow = sh;
-  // 추진 화염 (아래 4개 + 뒤 4개 노즐)
-  const flameMat = new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false });
-  const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .9, blending: THREE.AdditiveBlending, depthWrite: false });
-  // cone 기본은 꼭짓점이 +y → 뒤집어서 노즐(y=0)에서 아래로 뻗게
-  const fg = new THREE.ConeGeometry(.22, 1.8, 10, 1, true).rotateX(Math.PI).translate(0, -.9, 0);
-  const cg = new THREE.ConeGeometry(.1, 1.1, 8, 1, true).rotateX(Math.PI).translate(0, -.55, 0);
-  car.userData.flames = [];
-  const addFlame = (x, y, z, rotX, s = 1) => {
-    const f = new THREE.Group(); f.position.set(x, y, z); f.rotation.x = rotX; f.userData.s = s;
-    f.add(new THREE.Mesh(fg, flameMat), new THREE.Mesh(cg, coreMat));
-    f.scale.setScalar(0.001); car.add(f); car.userData.flames.push(f);
-  };
-  for (const x of [-.95, -.4, .4, .95]) addFlame(x, .3, -.05, 0);
-  for (const x of [-.42, -.14, .14, .42]) addFlame(x, .98, .05, -Math.PI / 2 - .12, .45); // 뒤쪽 노즐(+z)
+  // 증기 분사 4개: 레퍼런스처럼 네 바퀴 위치 아래로 수직 분사 (뒤 2개는 사진 앞, 앞 2개는 사진 뒤)
+  car.userData.jets = [];
+  for (const [x, z] of [[-1.02, .2], [1.02, .2], [-.5, .1], [.5, .1]]) { // 후면 카메라에서 4줄기가 모두 보이도록 차체 바로 아래(사진 앞)에 배치
+    const j = new THREE.Group(); j.position.set(x, .38, z);
+    j.add(new THREE.Mesh(JET.outerGeo, JET.outer), new THREE.Mesh(JET.coreGeo, JET.core));
+    const glow = new THREE.Sprite(JET.glowMat); glow.scale.setScalar(.7); j.add(glow);
+    j.visible = false; car.add(j); car.userData.jets.push(j);
+  }
   return car;
 }
 const car = buildRoadster();
@@ -191,7 +236,7 @@ const streakData = Array.from({ length: STREAKS }, () => ({ x: 0, y: 0, z: rand(
 streakData.forEach(resetStreak);
 function resetStreak(s) { const a = rand(0, Math.PI * 2), r = rand(9, 30); s.x = Math.cos(a) * r; s.y = 8 + Math.sin(a) * r * .6; s.z = rand(-160, -120); }
 
-const PN = 220;
+const PN = 420;
 const pGeo = new THREE.BufferGeometry();
 const pPos = new Float32Array(PN * 3), pSize = new Float32Array(PN), pAlpha = new Float32Array(PN);
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
@@ -220,7 +265,7 @@ function updateParticles(dt, worldSpeed) {
     p.life -= dt; const k = 1 - p.life / p.max;
     p.vx *= .95; p.vy *= .95; p.vz *= .95;
     pPos[i * 3] += p.vx * dt; pPos[i * 3 + 1] += p.vy * dt; pPos[i * 3 + 2] += (p.vz + worldSpeed) * dt;
-    pSize[i] = p.s0 * (1 + k * 3); pAlpha[i] = (1 - k) * .35;
+    pSize[i] = p.s0 * (1 + k * 3); pAlpha[i] = (1 - k) * (1 - k) * .5;
   }
   pGeo.attributes.position.needsUpdate = pGeo.attributes.size.needsUpdate = pGeo.attributes.alpha.needsUpdate = true;
 }
@@ -394,7 +439,7 @@ function setStage(i, keepScore = true) {
   // 교통 체증 위에서 시작
   ground.material.map = groundTex[G.stage.id]; ground.material.needsUpdate = true;
   car.position.set(0, 0, 0); car.rotation.set(0, 0, 0); target.set(0, LIFT_Y);
-  car.userData.flames.forEach(f => f.scale.setScalar(.001));
+  setJets(0, 0, 0);
   $('#hudStage').textContent = `STAGE ${i + 1}${G.lap ? ' · LAP ' + (G.lap + 1) : ''}`;
   $('#hudCity').textContent = G.stage.name; $('#hudDest').textContent = '목적지 · ' + G.stage.dest;
   setState('intro');
@@ -505,7 +550,6 @@ function collides(o) {
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
 function update(dt) {
   G.t += dt; G.stateT += dt; const t = G.t;
-  const flames = car.userData.flames;
 
   if (G.state === 'intro') {
     car.position.y = Math.sin(t * 9) * .01; // 공회전 떨림
@@ -515,8 +559,11 @@ function update(dt) {
     car.position.y = ease(k) * LIFT_Y;
     G.speed = G.targetSpeed * k * k;
     G.camBlend = ease(k);
-    flames.forEach((f, i) => f.scale.setScalar((i < 4 ? .3 + k * .9 : k) * f.userData.s));
-    if (k < .6 && Math.random() < .5) for (let i = 0; i < 4; i++) { const f = flames[i]; emit(f.position.x, car.position.y - .3, -1, rand(-9, 9), rand(-1, .5), rand(-6, 1), 1.1, 1); }
+    setJets(Math.min(1, G.stateT * 3), k * .35, t);
+    // 이륙 순간: 노면에 부딪힌 증기가 옆으로 크게 퍼짐 (레퍼런스의 바닥 연기)
+    if (car.position.y < 2.5) for (const j of car.userData.jets) {
+      if (Math.random() < .55) { _tip.set(0, 0, 0); j.localToWorld(_tip); emit(_tip.x, .3, _tip.z, rand(-10, 10), rand(.3, 2), rand(-7, 4), 1.8, 1.6); }
+    } else jetSteam(.6, 1.1, 1.1, 2);
     if (k >= 1) { setState('fly'); showBanner(`GO!<small>${G.stage.dest}까지 날아가자</small>`, 1.3); }
   } else if (G.state === 'fly') {
     // 입력
@@ -541,8 +588,7 @@ function update(dt) {
     car.position.x += (target.x - px) * f; car.position.y += (target.y - py) * f;
     const vx = (car.position.x - px) / dt, vy = (car.position.y - py) / dt;
     if (G.state !== 'over') { car.rotation.z += (-vx * .035 - car.rotation.z) * f; car.rotation.x += (vy * .02 - car.rotation.x) * f; car.rotation.y = -vx * .01; }
-    const flick = .85 + Math.random() * .3;
-    flames.forEach((fl, i) => { const s = fl.userData.s; fl.scale.set(s, (i < 4 ? .6 * flick : (.8 + G.speed / 80) * flick) * s, s); });
+    if (G.state !== 'over') { setJets(1, .35 + G.speed / 400, t); jetSteam(.5, 1, 1, 1.5); } else setJets(Math.max(0, 1 - G.stateT), .3, t);
     car.visible = G.inv <= 0 || (t * 12 | 0) % 2 === 0;
   }
   car.userData.shadow.visible = car.position.y < 2;
