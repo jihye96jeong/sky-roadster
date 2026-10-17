@@ -238,25 +238,27 @@ function resetStreak(s) { const a = rand(0, Math.PI * 2), r = rand(9, 30); s.x =
 
 const PN = 420;
 const pGeo = new THREE.BufferGeometry();
-const pPos = new Float32Array(PN * 3), pSize = new Float32Array(PN), pAlpha = new Float32Array(PN);
+const pPos = new Float32Array(PN * 3), pSize = new Float32Array(PN), pAlpha = new Float32Array(PN), pTint = new Float32Array(PN * 3);
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
 pGeo.setAttribute('size', new THREE.BufferAttribute(pSize, 1));
 pGeo.setAttribute('alpha', new THREE.BufferAttribute(pAlpha, 1));
+pGeo.setAttribute('tint', new THREE.BufferAttribute(pTint, 3));
 const pMat = new THREE.ShaderMaterial({
   uniforms: { map: { value: softTex }, scale: { value: 400 } },
-  vertexShader: `attribute float size; attribute float alpha; varying float vA; uniform float scale;
-    void main(){ vA = alpha; vec4 mv = modelViewMatrix * vec4(position,1.); gl_PointSize = size * scale / -mv.z; gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `uniform sampler2D map; varying float vA;
-    void main(){ vec4 c = texture2D(map, gl_PointCoord); gl_FragColor = vec4(vec3(.92,.94,1.), c.a * vA); }`,
+  vertexShader: `attribute float size; attribute float alpha; attribute vec3 tint; varying float vA; varying vec3 vT; uniform float scale;
+    void main(){ vA = alpha; vT = tint; vec4 mv = modelViewMatrix * vec4(position,1.); gl_PointSize = size * scale / -mv.z; gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform sampler2D map; varying float vA; varying vec3 vT;
+    void main(){ vec4 c = texture2D(map, gl_PointCoord); gl_FragColor = vec4(vT, c.a * vA); }`,
   transparent: true, depthWrite: false,
 });
 const smoke = new THREE.Points(pGeo, pMat); smoke.frustumCulled = false; scene.add(smoke);
-const parts = Array.from({ length: PN }, () => ({ life: 0, max: 1, vx: 0, vy: 0, vz: 0, s0: 1 }));
+const parts = Array.from({ length: PN }, () => ({ life: 0, max: 1, vx: 0, vy: 0, vz: 0, s0: 1, a: .5 }));
+const STEAM = [.92, .94, 1], SOOT = [.1, .1, .11], FIRE = [1, .55, .15];
 let pNext = 0;
-function emit(x, y, z, vx, vy, vz, size, life) {
+function emit(x, y, z, vx, vy, vz, size, life, tint = STEAM, a = .5) {
   const i = pNext = (pNext + 1) % PN, p = parts[i];
-  pPos[i * 3] = x; pPos[i * 3 + 1] = y; pPos[i * 3 + 2] = z;
-  Object.assign(p, { life, max: life, vx, vy, vz, s0: size });
+  pPos[i * 3] = x; pPos[i * 3 + 1] = y; pPos[i * 3 + 2] = z; pTint.set(tint, i * 3);
+  Object.assign(p, { life, max: life, vx, vy, vz, s0: size, a });
 }
 function updateParticles(dt, worldSpeed) {
   for (let i = 0; i < PN; i++) {
@@ -265,9 +267,9 @@ function updateParticles(dt, worldSpeed) {
     p.life -= dt; const k = 1 - p.life / p.max;
     p.vx *= .95; p.vy *= .95; p.vz *= .95;
     pPos[i * 3] += p.vx * dt; pPos[i * 3 + 1] += p.vy * dt; pPos[i * 3 + 2] += (p.vz + worldSpeed) * dt;
-    pSize[i] = p.s0 * (1 + k * 3); pAlpha[i] = (1 - k) * (1 - k) * .5;
+    pSize[i] = p.s0 * (1 + k * 3); pAlpha[i] = (1 - k) * (1 - k) * p.a;
   }
-  pGeo.attributes.position.needsUpdate = pGeo.attributes.size.needsUpdate = pGeo.attributes.alpha.needsUpdate = true;
+  pGeo.attributes.position.needsUpdate = pGeo.attributes.size.needsUpdate = pGeo.attributes.alpha.needsUpdate = pGeo.attributes.tint.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------- 장애물 / 링
@@ -461,9 +463,15 @@ function liftoff() {
   setState('liftoff');
 }
 const GRAVITY = 24;
-function crashDust() {
-  for (let i = 0; i < 30; i++) emit(car.position.x + rand(-1.2, 1.2), .3, rand(-2, 2), rand(-9, 9), rand(.5, 3), rand(-6, 6), 1.6, 1.4);
+function crashDust() { // 노면 충돌: 먼지 + 불꽃 파편
+  for (let i = 0; i < 26; i++) emit(car.position.x + rand(-1.2, 1.2), .3, rand(-2, 2), rand(-9, 9), rand(.5, 3), rand(-6, 6), 1.6, 1.4);
+  for (let i = 0; i < 22; i++) emit(car.position.x + rand(-.8, .8), .4, rand(-1, 1), rand(-12, 12), rand(3, 10), rand(-8, 8), .35, .6, FIRE, .95);
 }
+function wreckSmoke(rate) { // 잔해에서 피어오르는 검은 연기 + 불
+  if (Math.random() < rate) emit(car.position.x + rand(-.8, .8), car.position.y + rand(-.3, .5), rand(-1.5, .5), rand(-.6, .6), rand(2.5, 4), rand(-.5, .5), 1.4, 2.2, SOOT, .7);
+  if (Math.random() < rate * .7) emit(car.position.x + rand(-.7, .7), car.position.y * .5 + .3, rand(-1, .5), rand(-.3, .3), rand(1, 2.5), 0, .7, .45, FIRE, .9);
+}
+const carH = () => 2.6 * (texCache.car_player.aspect || .6); // 뒤집혔을 때 지붕이 노면에 닿는 높이
 function hit() {
   G.lives--; G.inv = 1.6; G.shake = .6; G.combo = 0;
   Sfx.noise(.35, .4); Sfx.tone(220, 60, .4, 'square', .12);
@@ -486,10 +494,12 @@ function stageClear() {
 }
 function gameOver() {
   setState('over'); saveBest();
-  // 도로 위로 추락: 살짝 튀어오른 뒤 한 바퀴 돌며 떨어져 노면에 착지. 착지 지점의 정체 차량은 비켜둠
-  G.vy = 3; G.landed = false;
-  const fallT = (G.vy + Math.sqrt(G.vy * G.vy + 2 * GRAVITY * car.position.y)) / GRAVITY;
-  G.spin = Math.PI * 2 / fallT; G.spinTo = car.rotation.z + Math.PI * 2;
+  // 추락: 튕겨 오른 뒤 1.5바퀴 구르며 떨어져 '뒤집힌 채' 노면에 처박힘. 착지 지점의 정체 차량은 비켜둠
+  G.vy = 5; G.landed = false; G.bounces = 0;
+  const dir = Math.random() < .5 ? -1 : 1;
+  const fallT = (G.vy + Math.sqrt(G.vy * G.vy + 2 * GRAVITY * Math.max(0, car.position.y - carH()))) / GRAVITY;
+  car.rotation.set(0, 0, 0);
+  G.spinTo = dir * Math.PI * 3; G.spin = G.spinTo / fallT; G.vx = dir * 1.2;
   G.inv = 0; car.visible = true; // 깜빡임 중이어도 추락 장면은 항상 보이게
   // 착지할 차선 구간(감속 중 밀려오는 거리 포함)을 비워 카메라에서 가리지 않게
   for (const tr of traffic) if (Math.abs(tr.x - car.position.x) < 2.8 && tr.z > -16 && tr.z < 13) tr.z -= SPAN * .5;
@@ -585,14 +595,24 @@ function update(dt) {
     G.speed *= 1 - dt * .8; target.y = Math.min(MAX_Y + 4, target.y + dt * 4);
   } else if (G.state === 'over') {
     G.speed *= 1 - Math.min(1, dt * 6); // 세상이 빠르게 멈춤
+    const done = Math.abs(car.rotation.z) >= Math.abs(G.spinTo);
+    const floor = carH() * (1 - Math.cos(car.rotation.z)) / 2; // 회전각에 따라 노면에 닿는 높이(뒤집히면 차 높이만큼)
     if (!G.landed) {
-      G.vy -= GRAVITY * dt; car.position.y += G.vy * dt;
-      car.rotation.z = Math.min(G.spinTo, car.rotation.z + G.spin * dt);
-      if (car.position.y <= 0) { // 노면 충돌 → 작게 한 번 튀고 정지
-        car.position.y = 0; car.rotation.z = G.spinTo;
-        if (G.vy < -5) { G.vy *= -.28; G.shake = .5; Sfx.noise(.3, .3); crashDust(); } else { G.vy = 0; G.landed = true; }
+      G.vy -= GRAVITY * dt; car.position.y += G.vy * dt; car.position.x += G.vx * dt;
+      if (!done) car.rotation.z += G.spin * dt; else car.rotation.z = G.spinTo;
+      car.rotation.x = Math.sin(G.stateT * 11) * .18; // 구르면서 요동
+      wreckSmoke(.9);
+      if (car.position.y <= floor) { // 노면 충돌 → 쾅, 튕김
+        car.position.y = floor; G.vx *= .4;
+        if (G.vy < -4 && G.bounces < 2) { G.vy *= -.32; G.bounces++; G.shake = .8; Sfx.noise(.45, .45); Sfx.tone(140, 40, .5, 'square', .14); crashDust(); }
+        else { G.vy = 0; G.landed = true; car.rotation.z = G.spinTo; }
       }
-    } else car.rotation.z += (G.spinTo + .05 - car.rotation.z) * Math.min(1, dt * 6); // 살짝 기운 채 멈춤
+    } else { // 뒤집힌 채 멈춰서 흔들리다 정지, 연기·불
+      car.rotation.x *= 1 - Math.min(1, dt * 5);
+      car.rotation.z = G.spinTo + Math.sin(G.stateT * 14) * .05 * Math.max(0, 1.5 - G.stateT);
+      car.position.y = carH() * (1 - Math.cos(car.rotation.z)) / 2;
+      wreckSmoke(.8);
+    }
   }
 
   // 차량 이동 / 기울기
@@ -639,6 +659,10 @@ function update(dt) {
   camPos.lerpVectors(tmpA, tmpB, G.camBlend);
   tmpA.set(0, 1.2, -15); tmpB.set(car.position.x * .8, car.position.y + .5, -25);
   camLook.lerpVectors(tmpA, tmpB, G.camBlend);
+  if (G.state === 'over') { // 추락 카메라: 옆으로 빠지며 뒤집힌 잔해를 내려다봄
+    const k = ease(Math.min(1, G.stateT * 1.5));
+    camPos.lerp(tmpA.set(car.position.x + 2.4, 3.6, 7), k); camLook.lerp(tmpB.set(car.position.x, 1, -1), k);
+  }
   if (G.shake > 0) { G.shake -= dt; camPos.x += rand(-.4, .4) * G.shake; camPos.y += rand(-.4, .4) * G.shake; }
   camera.position.copy(camPos); camera.lookAt(camLook);
 
