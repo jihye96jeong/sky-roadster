@@ -109,7 +109,8 @@ export function stageParams(i, lap = 0) {
     wideBonus: .5,                               // 회복·도입 게이트
     step: clamp(.7 + .15 * k, .7, .85),          // 게이트 사이 높이 변화 최대 한 칸 (단위: m) — 한 번엔 작게, 여러 개에 걸쳐 크게
     firstAt: 3.2,                                // 도시 진입 후 적응 시간
-    duration: 33,                                // 마지막 게이트까지 → 도착 약 38~41초 (이전과 같은 길이)
+    count: 20,                                   // 도시당 게이트 수 (같은 밀도 → 도착까지 약 25초)
+    duration: 21,                                // 구멍 크기가 시작→끝 값으로 줄어드는 시간 기준
   };
 }
 
@@ -121,7 +122,6 @@ function rng(seed) { // mulberry32: 같은 도시는 매번 같은 배치 → �
 export function generateTrack(i, lap = 0) {
   const P = stageParams(i, lap), R = rng(1000 + i * 17 + lap * 131);
   const gates = [], log = { adjusted: 0, sections: 0 };
-  const end = P.firstAt + P.duration;
   const prog = () => clamp((t - P.firstAt) / P.duration, 0, 1);
   const holeAt = wide => lerp(P.holeStart, P.holeEnd, prog()) + (wide ? P.wideBonus : 0);
   let t = P.firstAt, prev = null, band = 1, lastWave = -1;
@@ -153,7 +153,7 @@ export function generateTrack(i, lap = 0) {
     const n = Math.max(2, Math.ceil(1.5 * Math.abs(goal - prev.c) / P.step));
     const wi0 = (lastWave + 1 + Math.floor(R() * (WAVES.length - 1))) % WAVES.length;
     const est = n * P.gapNormal + (WAVES[wi0].length - 1) * P.gapDense + 2 * P.gapRecover;
-    if (t + est > end + 3) break;             // 도시 길이 유지: 남은 시간에 안 맞는 구간은 시작하지 않음
+    if (gates.length + n + WAVES[wi0].length + 1 > P.count) break; // 남은 개수에 안 맞는 구간은 시작하지 않음
     band = nb; log.sections++;
     const from = prev.c;
     for (let k = 1; k <= n; k++) { const e = k / n, s2 = e * e * (3 - 2 * e); push(from + (goal - from) * s2, k === 1 ? P.gapNormal : P.gapNormal * .96, 'move', false); }
@@ -165,7 +165,7 @@ export function generateTrack(i, lap = 0) {
     for (let k = 0; k < 2; k++) push(prev.c + (R() - .5) * .12, P.gapRecover, 'recover', true);
   }
   // 남은 시간은 중앙 쪽으로 돌아오는 넓은 게이트 + 작은 물결로 채우고 도착 (평평하게만 반복하지 않음)
-  for (let k = 0; t + P.gapNormal < end; k++) push(prev.c + (GATE.MID - prev.c) * .35 + (k % 2 ? .3 : -.3), P.gapNormal, 'recover', true);
+  for (let k = 0; gates.length < P.count; k++) push(prev.c + (GATE.MID - prev.c) * .35 + (k % 2 ? .3 : -.3), P.gapNormal, 'recover', true);
   const finishT = prev.t + 2.4;
   for (const g of gates) g.d = g.t * P.speed;  // 트랙 거리 (시간 × 속도 → 속도가 바뀌어도 통과 시간 간격 유지)
   return { params: P, gates, finishD: finishT * P.speed, log };

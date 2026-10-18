@@ -261,7 +261,7 @@ const streakData = Array.from({ length: STREAKS }, () => ({ x: 0, y: 0, z: rand(
 streakData.forEach(resetStreak);
 function resetStreak(s) { const a = rand(0, Math.PI * 2), r = rand(9, 30); s.x = Math.cos(a) * r; s.y = 8 + Math.sin(a) * r * .6; s.z = rand(-160, -120); }
 
-const PN = 420;
+const PN = 760; // 클리어 퍼포먼스의 긴 증기 궤적까지 담을 수 있게
 const pGeo = new THREE.BufferGeometry();
 const pPos = new Float32Array(PN * 3), pSize = new Float32Array(PN), pAlpha = new Float32Array(PN), pTint = new Float32Array(PN * 3);
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
@@ -680,14 +680,19 @@ function hitGate(g, yc) {
 // 신기록 표시는 '기존 기록을 넘었을 때'만 (첫 판은 기록 저장만). 게이트 점수 체계라 저장 키를 버전 분리
 const BEST_KEY = 'skyroadster.best.v2';
 function saveBest() { const beat = G.score > G.best; const isNew = beat && G.best > 0; if (beat) { G.best = G.score; store.set(BEST_KEY, G.best); } return isNew; }
+const PERF_DUR = 2.6, PERF_ROLLS = RM ? 1 : 2;
+const _tip2 = new THREE.Vector3();
 function stageClear() {
   setState('clear');
   const bonus = G.lives * 100; G.score += bonus; // 점수의 주된 이유는 게이트 통과, 도착 보너스는 작게
   Sfx.tone(523, 523, .15, 'triangle', .15); Sfx.tone(659, 659, .15, 'triangle', .15, .15); Sfx.tone(784, 784, .15, 'triangle', .15, .3); Sfx.tone(1046, 1046, .4, 'triangle', .15, .45);
   hideTutorial(); UI.combo.classList.remove('show');
-  showStageTitle('ARRIVED', G.stage.name, G.stage.dest, 1.6);
+  showStageTitle('ARRIVED', G.stage.name, G.stage.dest, 2.6);
+  // 도착 퍼포먼스: 분사 증기를 뿜으며 빙그르르 두 바퀴 (결과 화면은 연출 뒤에)
+  G.perfY0 = car.position.y; G.perfDir = Math.random() < .5 ? -1 : 1; G.perfSfx = false;
+  car.userData.vis.rotation.set(0, 0, 0); setCarTint(0, 1);
   const prevBest = G.best, isNew = saveBest();
-  later(1.5, () => {
+  later(PERF_DUR + .3, () => {
     const last = G.stageIdx === STAGES.length - 1;
     openResult({
       kicker: last ? 'WORLD TOUR COMPLETE' : `STAGE ${String(G.stageIdx + 1).padStart(2, '0')} CLEAR`,
@@ -945,10 +950,25 @@ function update(dt) {
       G.prevHold = holding;
     }
   } else if (G.state === 'clear') {
-    G.speed *= 1 - dt * .8; target.y = Math.min(PHYS.MAX_Y + 4, target.y + dt * 4);
-    car.position.y += (target.y - car.position.y) * Math.min(1, dt * 6);
-    G.jet += (.8 - G.jet) * Math.min(1, dt * 6); setJets(G.jet, .4, t); jetSteam(.4, 1, 1, 1.5);
-    vis.rotation.x += (.05 - vis.rotation.x) * Math.min(1, dt * 4);
+    // 도착 퍼포먼스: 솟구치며 진행 축(z)으로 두 바퀴 배럴 롤 → 분사구 방향으로 뿜는 증기가 나선 궤적을 그림
+    const T = G.stateT, k = clamp((T - .2) / 1.9, 0, 1), e = ease(k);
+    G.speed *= 1 - Math.min(1, dt * 1.8);   // 세상을 거의 멈춰 증기 궤적이 공중에 남게
+    car.position.y = G.perfY0 + Math.sin(clamp(T / PERF_DUR, 0, 1) * Math.PI) * 4.2 + clamp(T - 1.6, 0, 1) * 1.2;
+    car.position.x = Math.sin(e * Math.PI) * 1.4 * G.perfDir;   // 살짝 옆으로 휘어 나가는 궤적
+    car.rotation.z = G.perfDir * e * Math.PI * 2 * PERF_ROLLS;
+    car.rotation.x = Math.sin(e * Math.PI) * .12;
+    vis.rotation.set(0, 0, 0); vis.position.y = 0;
+    G.jet += (1 - G.jet) * Math.min(1, dt * 10); setJets(G.jet, .15, t);
+    if (!G.perfSfx && T > .2) { G.perfSfx = true; Sfx.tone(260, 1100, 1.4, 'sawtooth', .035); Sfx.noise(1.6, .09); }
+    if (T < PERF_DUR) { // 각 분사구의 '아래 방향'(회전한 차 기준)으로 증기 분출 → 회전 따라 소용돌이
+      car.updateMatrixWorld();
+      for (const j of car.userData.jets) {
+        if (Math.random() > .85) continue;
+        _tip.set(0, -.5, 0); j.localToWorld(_tip); _tip2.set(0, -1.5, 0); j.localToWorld(_tip2); _tip2.sub(_tip).normalize();
+        const sp = 7 + Math.random() * 3;
+        emit(_tip.x, _tip.y, _tip.z, _tip2.x * sp + rand(-.4, .4), _tip2.y * sp + rand(-.4, .4), _tip2.z * sp, .9, 2.6, STEAM, .5);
+      }
+    }
   } else if (G.state === 'over') {
     G.speed *= 1 - Math.min(1, dt * 6); // 세상이 빠르게 멈춤
     G.jet = Math.max(0, G.jet - dt * 3); setJets(G.jet, .3, t);
@@ -997,6 +1017,10 @@ function update(dt) {
   // 차는 화면 아래쪽, 다음 구멍은 그 위로 → 차가 구멍을 가리지 않게 약간 높고 뒤에서
   camPos.copy(tmpA).lerp(_p.set(0, camY + 3.4, 13), G.camBlend);
   camLook.copy(tmpB).lerp(_s.set(0, camY + 1.1, -40), G.camBlend);
+  if (G.state === 'clear') { // 퍼포먼스 카메라: 천천히 뒤로 빠지며 회전과 증기 궤적을 한 화면에
+    const k = ease(Math.min(1, G.stateT / 1.2));
+    camPos.lerp(tmpA.set(car.position.x * .35, car.position.y + 1.4, 12.5), k); camLook.lerp(tmpB.set(car.position.x * .75, car.position.y + .7, -2), k);
+  }
   if (G.state === 'over') { // 추락 카메라: 옆으로 빠지며 뒤집힌 잔해를 내려다봄
     const k = ease(Math.min(1, G.stateT * 1.5));
     camPos.lerp(tmpA.set(car.position.x + 2.4, 3.6, 7), k); camLook.lerp(tmpB.set(car.position.x, 1, -1), k);

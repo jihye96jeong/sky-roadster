@@ -60,7 +60,8 @@ for (let lap = 0; lap < 3; lap++) for (let i = 0; i < 6; i++) {
     ok(g.c - g.h / 2 > GATE.BOTTOM && g.c + g.h / 2 < GATE.TOP, `${tag} gate ${g.idx} hole outside panels`); });
   // 5) 같은 도시는 같은 배치(재도전 시 익힘), 도시 길이 유지(38~43초)
   ok(JSON.stringify(G.map(g => g.c.toFixed(3))) === JSON.stringify(generateTrack(i, lap).gates.map(g => g.c.toFixed(3))), `${tag} not deterministic`);
-  const fin = tr.finishD / P.speed; ok(fin > 37 && fin < 45.5, `${tag} stage length ${fin.toFixed(1)}s`);
+  ok(G.length === 20, `${tag} gate count ${G.length}`);
+  const fin = tr.finishD / P.speed; ok(fin > 20 && fin < 32, `${tag} stage length ${fin.toFixed(1)}s`);
   // 6) 사람 수준(0.1s 판단) 무피해 완주 · 저프레임 동일 · 중복 이벤트 없음
   const r = fly(tr, human, { decide: .1 });
   ok(count(r, 'hit') === 0, `${tag} human bot hit ${count(r, 'hit')}`);
@@ -79,7 +80,7 @@ for (let lap = 0; lap < 3; lap++) for (let i = 0; i < 6; i++) {
   }
   // 9) 피격 직후 회복: k 번째 게이트에서 일부러 아래 패널에 부딪힌 뒤 정상 조작 → 다음 2개 게이트는 통과
   let recOK = 0, recN = 0;
-  for (let k = 4; k < G.length - 3; k += 3) {
+  for (let k = 3; k < G.length - 3; k += 1) {
     const res = fly(tr, (s, g, t, ctx) => g ? (ctx.ni === k ? false : lead(s, g.c)) : false, { decide: .1 });
     if (res[k].resolved !== 'hit') continue; recN++;
     if (['pass', 'perfect'].includes(res[k + 1].resolved) && ['pass', 'perfect'].includes(res[k + 2].resolved)) recOK++;
