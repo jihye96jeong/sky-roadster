@@ -60,8 +60,8 @@ for (let lap = 0; lap < 3; lap++) for (let i = 0; i < 6; i++) {
     ok(g.c - g.h / 2 > GATE.BOTTOM && g.c + g.h / 2 < GATE.TOP, `${tag} gate ${g.idx} hole outside panels`); });
   // 5) 같은 도시는 같은 배치(재도전 시 익힘), 도시 길이 유지(38~43초)
   ok(JSON.stringify(G.map(g => g.c.toFixed(3))) === JSON.stringify(generateTrack(i, lap).gates.map(g => g.c.toFixed(3))), `${tag} not deterministic`);
-  ok(G.length === 20, `${tag} gate count ${G.length}`);
-  const fin = tr.finishD / P.speed; ok(fin > 20 && fin < 32, `${tag} stage length ${fin.toFixed(1)}s`);
+  ok(G.length === 15, `${tag} gate count ${G.length}`);
+  const fin = tr.finishD / P.speed; ok(fin > 15 && fin < 26, `${tag} stage length ${fin.toFixed(1)}s`);
   // 6) 사람 수준(0.1s 판단) 무피해 완주 · 저프레임 동일 · 중복 이벤트 없음
   const r = fly(tr, human, { decide: .1 });
   ok(count(r, 'hit') === 0, `${tag} human bot hit ${count(r, 'hit')}`);
