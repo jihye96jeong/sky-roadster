@@ -1,7 +1,7 @@
 // SKY ROADSTER — 가벼운 3D 원버튼 게임 (three.js 하나만 사용, 실사 스프라이트는 xAI로 미리 생성한 자산)
 import * as THREE from 'three';
 import { LANGS, detectLang, setLang, getLang, t, destName, applyStatic } from './i18n.js';
-import { PHYS, GATE, stepCar, generateTrack, sweepPlanes, safeHalf, holeTop, holeBottom } from './track.js';
+import { PHYS, GATE, stepCar, generateTrack, sweepPlanes, perfectHalf, holeTop, holeBottom } from './track.js';
 
 // ---------------------------------------------------------------- 로딩 추적 (깨진 차량/빈 배경을 보여주지 않기 위해)
 // TextureLoader 는 DefaultLoadingManager 를 쓰므로, 텍스처 로드를 시작하기 전에 훅을 단다
@@ -323,12 +323,13 @@ function gateBox(w, h, d, mat, x, y, z) { // 크기에 맞춰 UV 를 늘려 텍�
 }
 function gateLine(w, h, mat, x, y, z) { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); m.position.set(x, y, z); return m; }
 function buildGate(g) {
-  const grp = new THREE.Group(), W = GATE.HALF_W * 2, top = holeTop(g), bot = holeBottom(g), RAIL = .26;
+  const grp = new THREE.Group(), W = GATE.HALF_W * 2, top = holeTop(g), bot = holeBottom(g), RAIL = .2;
   const panelTop = GM.panel.clone(), panelBot = GM.panel.clone(), edge = GM.edge.clone(), side = GM.edge.clone();
   // 기둥·빔 (불투명 금속)
-  for (const sx of [-1, 1]) grp.add(gateBox(.7, GATE.TOP + .8, .9, GM.metal, sx * (GATE.HALF_W + .35), (GATE.TOP + .8) / 2, 0));
-  grp.add(gateBox(W + 1.4, .7, .9, GM.metal, 0, GATE.TOP + .35, 0));
-  grp.add(gateBox(W + 1.4, .5, .9, GM.metal, 0, GATE.BOTTOM - .25, 0));
+  // 촘촘한 배치에서 겹쳐 보이지 않게 프레임은 얇게
+  for (const sx of [-1, 1]) grp.add(gateBox(.45, GATE.TOP + .5, .6, GM.metal, sx * (GATE.HALF_W + .22), (GATE.TOP + .5) / 2, 0));
+  grp.add(gateBox(W + .9, .4, .6, GM.metal, 0, GATE.TOP + .2, 0));
+  grp.add(gateBox(W + .9, .35, .6, GM.metal, 0, GATE.BOTTOM - .18, 0));
   // 패널 (반투명: 막혀 있음은 분명하되 뒤 게이트가 비쳐 보이게)
   grp.add(gateBox(W, GATE.TOP - (top + RAIL), .25, panelTop, 0, (GATE.TOP + top + RAIL) / 2, 0));
   grp.add(gateBox(W, (bot - RAIL) - GATE.BOTTOM, .25, panelBot, 0, (bot - RAIL + GATE.BOTTOM) / 2, 0));
@@ -368,21 +369,25 @@ function syncGates() {
   if (!finishObj && fz > -SPAWN_DIST && fz < 30) { finishObj = makeFinish(G.stage.dest); scene.add(finishObj); }
   if (finishObj) { finishObj.position.z = fz; finishObj.children[0].rotation.z = G.t * .5; }
 }
-// 가독성: 지금 통과할 게이트는 선명하게, 먼 게이트는 약하게. 값은 부드럽게 따라가 번쩍임 없음
+// 가독성: 다음 게이트 > 그다음 > 나머지 순으로 명암. 패널은 뒤로 갈수록 거의 투명해 겹쳐도 벽이 되지 않음.
+// 값은 부드럽게 따라가 번쩍임 없음. 충돌 경계(밝은 테두리)는 항상 남는다
+const RANK_EDGE = [1, .5, .26], RANK_PANEL = [.5, .24, .1];
 function styleGates(dt) {
-  const next = G.gates.find(g => !g.resolved && G.dist - g.d < 2);
-  const k = 1 - Math.exp(-dt * 4);
+  const k = 1 - Math.exp(-dt * 5);
+  let rank = 0;
   for (const g of G.gates) {
     if (!g.obj) continue;
-    const u = g.obj.userData, D = g.d - G.dist, isNext = g === next;
-    const near = clamp((200 - D) / 160, 0, 1);
-    const tgt = g.resolved ? .12 : isNext ? .6 + .4 * near : .3;
-    u.a += (tgt - u.a) * k;
+    const u = g.obj.userData, D = g.d - G.dist, pending = !g.resolved && G.dist - g.d < 2;
+    const r = pending ? Math.min(rank++, 2) : -1;
+    const near = clamp((160 - D) / 120, 0, 1);
+    const edgeT = r < 0 ? .1 : r === 0 ? .65 + .35 * near : RANK_EDGE[r];
+    const panelT = r < 0 ? .08 : RANK_PANEL[r];
+    u.a += (edgeT - u.a) * k; u.p = (u.p ?? panelT) + (panelT - (u.p ?? panelT)) * k;
     u.edge.opacity = u.a; u.side.opacity = u.a;
     u.flash = Math.max(0, (u.flash || 0) - dt * 1.6);
     for (const [m, sideName] of [[u.panelTop, 'top'], [u.panelBot, 'bottom']]) {
-      m.opacity = (isNext ? .58 : .42) * (g.resolved ? .7 : 1);
       const f = u.flashSide === sideName ? u.flash : 0;   // 피격한 쪽 패널만 붉게 → 실패 원인이 보임
+      m.opacity = Math.max(u.p, f * .6);
       m.emissive.setRGB(f * .9, f * .08, f * .05);
     }
   }
@@ -640,7 +645,7 @@ function setCarTint(red, alpha) { // 피격: 차를 숨기지 않고 짧게 붉�
 }
 // 게이트 통과(모든 판정면을 구멍 안에서 지남) → +100, PERFECT 면 +50 추가
 function passGate(g) {
-  const perfect = Math.abs(g.center) <= GATE.PERFECT * safeHalf(g);
+  const perfect = Math.abs(g.center) <= perfectHalf(g); // 절대 ±0.4 (구멍이 넓어져도 PERFECT 는 정교하게)
   g.resolved = perfect ? 'perfect' : 'pass';
   G.gatesPassed++;
   if (perfect) {
@@ -654,8 +659,9 @@ function passGate(g) {
     Sfx.tone(820, 980, .09, 'sine', .08);
   }
 }
-// 패널 충돌: 목숨 -1, 짧은 무적, 같은 게이트 재피해 없음, 큰 넉백 없음(구멍 쪽으로 살짝만)
-const INV_TIME = 1.0, RECOVER_DELAY = .6;
+// 패널 충돌: 목숨 -1, 짧은 무적, 같은 게이트 재피해 없음(게이트별 상태), 큰 넉백 없음(구멍 쪽으로 살짝만)
+// 무적 0.5초 < 최소 게이트 간격(약 0.87초) → 무적으로 다음 게이트를 뚫고 지나가는 이득이 없음
+const INV_TIME = .5;
 function hitGate(g, yc) {
   g.resolved = 'hit';
   const side = yc > g.c ? 'top' : 'bottom';
@@ -668,10 +674,7 @@ function hitGate(g, yc) {
   UI.vignette.classList.remove('hit'); void UI.vignette.offsetWidth; UI.vignette.classList.add('hit');
   UI.combo.classList.remove('show');
   renderLives(true);
-  // 회복 구간: 아직 생성되지 않은(보이지 않는) 다음 게이트들만 조금 뒤로 → 보이는 게이트는 그대로
-  const extra = RECOVER_DELAY * G.targetSpeed;
-  for (const n of G.gates) if (!n.obj && n.d - G.dist > SPAWN_DIST) n.d += extra;
-  if (!finishObj) G.track.finishD += extra;
+  // 회복은 배치 자체(넓은 구멍·겹치는 안전 범위·회복 게이트)가 담당 → 게이트를 옮기지 않음
   if (G.lives <= 0) gameOver();
 }
 // 신기록 표시는 '기존 기록을 넘었을 때'만 (첫 판은 기록 저장만). 게이트 점수 체계라 저장 키를 버전 분리
