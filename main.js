@@ -1100,4 +1100,4 @@ window.__srBooted = true;
 window.__G = G;
 window.__dbg = { car, hold: v => { testHold = v; }, crash: () => gameOver(), clear: () => stageClear(),
   step: (dt, n = 1) => { for (let k = 0; k < n; k++) update(dt); renderer.render(scene, camera); },
-  freeze: v => { window.__freeze = v; }, restart: (i = 0) => { closeResult(); setStage(i, false, 'air'); } };
+  freeze: v => { window.__freeze = v; }, restart: (i = 0) => { closeResult(); setStage(i, false, 'air'); }, title: () => toTitle() };
