@@ -1,6 +1,7 @@
 // SKY ROADSTER — 가벼운 3D 원버튼 게임 (three.js 하나만 사용, 실사 스프라이트는 xAI로 미리 생성한 자산)
 import * as THREE from 'three';
 import { LANGS, detectLang, setLang, getLang, t, destName, applyStatic } from './i18n.js';
+import { PHYS, GATE, stepCar, generateTrack, sweepPlanes, safeHalf, holeTop, holeBottom } from './track.js';
 
 // ---------------------------------------------------------------- 로딩 추적 (깨진 차량/빈 배경을 보여주지 않기 위해)
 // TextureLoader 는 DefaultLoadingManager 를 쓰므로, 텍스처 로드를 시작하기 전에 훅을 단다
@@ -13,17 +14,18 @@ const RM = matchMedia('(prefers-reduced-motion: reduce)').matches; // 장식용 
 // ---------------------------------------------------------------- 스테이지 데이터
 // hz: 배경 사진에서 도시가 땅/물과 만나는 높이 비율 → 3D 지평선에 맞춘다
 const STAGES = [
-  { id: 'seoul',   name: 'SEOUL',    hz: .86, signs: ['강남 Gangnam', '여의도 Yeouido', '종로 Jongno', '한남대교'],              mix: { sign: 4, bird: 3, drone: 1, balloon: 0 } },
-  { id: 'london',  name: 'LONDON',   hz: .885, signs: ['Westminster', 'Tower Bridge', 'Camden Town', 'A4 Piccadilly'],       mix: { sign: 3, bird: 3, drone: 2, balloon: 1 } },
-  { id: 'paris',   name: 'PARIS',    hz: .9, signs: ['Champs-Élysées', 'Montmartre', 'Louvre', 'Périphérique'],          mix: { sign: 2, bird: 4, drone: 1, balloon: 3 } },
-  { id: 'dubai',   name: 'DUBAI',    hz: .97, signs: ['Sheikh Zayed Rd', 'Downtown', 'Palm Jumeirah', 'Dubai Marina'],     mix: { sign: 3, bird: 2, drone: 4, balloon: 1 } },
-  { id: 'sydney',  name: 'SYDNEY',   hz: .775, signs: ['Harbour Bridge', 'Bondi Beach', 'Circular Quay', 'Darling Harbour'], mix: { sign: 2, bird: 4, drone: 2, balloon: 2 } },
-  { id: 'newyork', name: 'NEW YORK', hz: .955, signs: ['Broadway', 'Times Sq', 'Brooklyn Br', '5th Ave'],                     mix: { sign: 3, bird: 3, drone: 3, balloon: 2 } },
+  { id: 'seoul',   name: 'SEOUL',    hz: .86 },
+  { id: 'london',  name: 'LONDON',   hz: .885 },
+  { id: 'paris',   name: 'PARIS',    hz: .9 },
+  { id: 'dubai',   name: 'DUBAI',    hz: .97 },
+  { id: 'sydney',  name: 'SYDNEY',   hz: .775 },
+  { id: 'newyork', name: 'NEW YORK', hz: .955 },
 ];
 // 목적지 이름은 현재 언어로 (i18n.js)
 STAGES.forEach(st => Object.defineProperty(st, 'dest', { get: () => destName(st.id) }));
 // 비행 고도: 정체된 차 지붕(~2.3m) 바로 위를 낮게 난다
-const SPAWN_Z = -260, MIN_Y = 3, MAX_Y = 12, LIFT_Y = 5, THRUST = 26, FALL = 17;
+const SPAWN_Z = -270, SPAWN_DIST = 270, LIFT_Y = 5;
+const DEBUG = { on: new URLSearchParams(location.search).has('debug') }; // ?debug 또는 ` 키: 구멍·충돌체·판정면·도달 범위 표시
 
 const $ = s => document.querySelector(s);
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -295,104 +297,134 @@ function updateParticles(dt, worldSpeed) {
   pGeo.attributes.position.needsUpdate = pGeo.attributes.size.needsUpdate = pGeo.attributes.alpha.needsUpdate = pGeo.attributes.tint.needsUpdate = true;
 }
 
-// ---------------------------------------------------------------- 장애물 / 링
-const OG = { // 공유 지오메트리·재질
-  pole: new THREE.CylinderGeometry(.18, .18, 1, 6), poleM: new THREE.MeshStandardMaterial({ color: 0x8b9097, metalness: .6 }),
-  board: new THREE.BoxGeometry(8, 2.8, .25),
-  ring: new THREE.TorusGeometry(2.2, .2, 8, 28), ringM: new THREE.MeshBasicMaterial({ color: 0xffd23a }),
-  gate: new THREE.TorusGeometry(9, .55, 8, 48), gateM: new THREE.MeshBasicMaterial({ color: 0x7fe3ff }),
+// ---------------------------------------------------------------- SKY GATE (유일한 장애물, 코드 기반 메시: 외형 = 충돌 치수)
+// 상단·하단 패널이 플레이 높이의 나머지를 모두 막고, 가운데 가로 직사각형 구멍만 안전하다.
+const fallbackMetal = canvasTex(256, 256, (g, w, h) => { // xAI 텍스처를 못 불러오면 쓰는 코드 텍스처
+  g.fillStyle = '#3a3f47'; g.fillRect(0, 0, w, h); g.fillStyle = 'rgba(0,0,0,.55)';
+  for (let y = 12; y < h; y += 18) for (let x = 10; x < w; x += 34) g.fillRect(x, y, 20, 3);
+  g.fillStyle = 'rgba(255,255,255,.06)'; for (let y = 0; y < h; y += 64) g.fillRect(0, y, w, 1);
+});
+fallbackMetal.wrapS = fallbackMetal.wrapT = THREE.RepeatWrapping;
+const GM = {
+  metal: new THREE.MeshStandardMaterial({ color: 0x9aa1ab, metalness: .6, roughness: .45, map: fallbackMetal }),
+  panel: new THREE.MeshStandardMaterial({ color: 0x9aa4b2, metalness: .45, roughness: .55, map: fallbackMetal, transparent: true, opacity: .5, depthWrite: false }),
+  // 구멍 테두리: 안개 영향을 받지 않아 먼 거리에서도 구멍 윤곽이 읽힘 (밝기는 거리·순서별 opacity 로 조절)
+  edge: new THREE.MeshBasicMaterial({ color: 0xd6f1ff, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }),
+  finish: new THREE.MeshBasicMaterial({ color: 0x7fe3ff }),
 };
-const signMats = {};
-function signMat(text) {
-  if (!signMats[text]) signMats[text] = [OG.poleM, OG.poleM, OG.poleM, OG.poleM, new THREE.MeshStandardMaterial({
-    roughness: .6, map: canvasTex(512, 180, (g, w, h) => {
-      g.fillStyle = '#0d6b3a'; g.fillRect(0, 0, w, h);
-      g.strokeStyle = '#fff'; g.lineWidth = 8; g.strokeRect(10, 10, w - 20, h - 20);
-      g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.font = 'bold 64px "Malgun Gothic", system-ui, sans-serif'; g.fillText(text, w / 2, h / 2 - 8, w - 50);
-      g.font = 'bold 34px system-ui'; g.fillText('↑', w - 48, h / 2 + 50);
-    }),
-  }), OG.poleM];
-  return signMats[text];
+texLoader.load('assets/tex_gate_metal.jpg', tex => { // xAI 로 미리 생성한 건메탈 패널 (런타임 API 호출 없음)
+  tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.anisotropy = 4;
+  GM.metal.map = GM.panel.map = tex; GM.metal.needsUpdate = GM.panel.needsUpdate = true;
+});
+function gateBox(w, h, d, mat, x, y, z) { // 크기에 맞춰 UV 를 늘려 텍스처가 찌그러지지 않게
+  const geo = new THREE.BoxGeometry(w, h, d), uv = geo.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * Math.max(w, d) / 3, uv.getY(i) * Math.max(h, d) / 3);
+  const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); return m;
 }
-
-let obstacles = [];
-// 각 장애물: { g: Group, boxes: [[cx,cy,cz,hx,hy,hz]...], tick(dt,t), kind }
-function makeSign(x, y, text) {
-  const g = new THREE.Group(); g.position.set(x, y, SPAWN_Z);
-  const b = new THREE.Mesh(OG.board, signMat(text)); g.add(b);
-  const side = x > 0 ? 3.6 : -3.6;
-  const p = new THREE.Mesh(OG.pole, OG.poleM); p.scale.y = 70; p.position.set(side, -35, 0); g.add(p);
-  return { kind: 'sign', g, boxes: [[0, 0, 0, 4, 1.4, .4], [side, -35, 0, .25, 35, .25]] };
+function gateLine(w, h, mat, x, y, z) { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); m.position.set(x, y, z); return m; }
+function buildGate(g) {
+  const grp = new THREE.Group(), W = GATE.HALF_W * 2, top = holeTop(g), bot = holeBottom(g), RAIL = .26;
+  const panelTop = GM.panel.clone(), panelBot = GM.panel.clone(), edge = GM.edge.clone(), side = GM.edge.clone();
+  // 기둥·빔 (불투명 금속)
+  for (const sx of [-1, 1]) grp.add(gateBox(.7, GATE.TOP + .8, .9, GM.metal, sx * (GATE.HALF_W + .35), (GATE.TOP + .8) / 2, 0));
+  grp.add(gateBox(W + 1.4, .7, .9, GM.metal, 0, GATE.TOP + .35, 0));
+  grp.add(gateBox(W + 1.4, .5, .9, GM.metal, 0, GATE.BOTTOM - .25, 0));
+  // 패널 (반투명: 막혀 있음은 분명하되 뒤 게이트가 비쳐 보이게)
+  grp.add(gateBox(W, GATE.TOP - (top + RAIL), .25, panelTop, 0, (GATE.TOP + top + RAIL) / 2, 0));
+  grp.add(gateBox(W, (bot - RAIL) - GATE.BOTTOM, .25, panelBot, 0, (bot - RAIL + GATE.BOTTOM) / 2, 0));
+  // 구멍 경계 레일 (단단한 금속) — 구멍 안쪽으로는 아무것도 들어가지 않는다
+  grp.add(gateBox(W, RAIL, .5, GM.metal, 0, top + RAIL / 2, 0));
+  grp.add(gateBox(W, RAIL, .5, GM.metal, 0, bot - RAIL / 2, 0));
+  // 얇은 발광 테두리: 구멍 4변 바로 바깥(레일·기둥 앞면) → 안전한 구멍 = 밝은 사각 윤곽, 그 밖은 막힘
+  grp.add(gateLine(W + .24, .12, edge, 0, top + .08, .27), gateLine(W + .24, .12, edge, 0, bot - .08, .27));
+  for (const sx of [-1, 1]) grp.add(gateLine(.12, g.h + .28, side, sx * (GATE.HALF_W + .06), g.c, .47));
+  grp.userData = { panelTop, panelBot, edge, side, a: 0 };
+  return grp;
 }
-function makeBirds(x, y) {
-  const g = new THREE.Group(); g.position.set(x, y, SPAWN_Z);
-  const n = 3 + (Math.random() * 4 | 0), boxes = [], birds = [];
-  const kind = Math.random() < .5 ? 'obs_bird' : 'obs_pigeon';
-  for (let i = 0; i < n; i++) {
-    const ox = (i - n / 2) * 2 + rand(-.4, .4), oy = rand(-1.2, 1.2), oz = Math.abs(i - n / 2) * 1.6;
-    const b = photoMesh(kind, 1.9, true); b.position.set(ox, oy, oz); b.userData.ph = rand(0, 6);
-    g.add(b); birds.push(b); boxes.push([ox, oy, oz, .8, .35, .5]);
-  }
-  return { kind: 'bird', g, boxes, tick(dt, t) {
-    g.position.y += Math.sin(t * 2) * dt;
-    for (const b of birds) { const c = texCache[b.userData.photo]; const f = Math.sin(t * 12 + b.userData.ph); // 날갯짓: 세로로 살짝 찌그러뜨려 흉내
-      b.scale.set(1.9 * (1 - Math.abs(f) * .12), 1.9 * (c.aspect || .4) * (1 + f * .35), 1); b.rotation.z = f * .05; }
-  } };
-}
-function makeDrone(x, y) {
-  const g = new THREE.Group(); g.position.set(x, y, SPAWN_Z);
-  const d = photoMesh('obs_drone', 2.8, true); g.add(d);
-  const y0 = y, ph = rand(0, 6), amp = rand(.8, 1.8);
-  return { kind: 'drone', g, boxes: [[0, 0, 0, 1.4, .5, .8]], tick(dt, t) {
-    g.position.y = y0 + Math.sin(t * 1.6 + ph) * amp; // 위아래로 천천히 오르내림
-    d.rotation.z = Math.sin(t * 3 + ph) * .05;
-  } };
-}
-function makeBalloon(x, y) {
-  const g = new THREE.Group(); g.position.set(x, y, SPAWN_Z);
-  g.add(photoMesh(Math.random() < .5 ? 'obs_balloon' : 'obs_balloon2', 6.5, true));
-  const vy = rand(-.6, .8);
-  return { kind: 'balloon', g, boxes: [[0, 1, 0, 2.9, 3.2, 2.5], [0, -3.9, 0, .5, .5, .5]], tick(dt) { g.position.y += vy * dt; } };
-}
-['obs_bird', 'obs_pigeon', 'obs_drone', 'obs_balloon', 'obs_balloon2'].forEach(photoTex); // 미리 로드
-
-function makeRing(x, y) {
-  const g = new THREE.Group(); g.position.set(x, y, SPAWN_Z);
-  g.add(new THREE.Mesh(OG.ring, OG.ringM));
-  return { kind: 'ring', g, boxes: [], tick(dt, t) { g.children[0].rotation.z = t * 2; } };
-}
-function makeGate(label) {
+function disposeGate(grp) { grp.traverse(o => { if (o.isMesh) o.geometry.dispose(); }); const u = grp.userData; [u.panelTop, u.panelBot, u.edge, u.side].forEach(m => m.dispose()); }
+function makeFinish(label) { // 목적지 도착선 (충돌 없음)
   const g = new THREE.Group(); g.position.set(0, 8.5, SPAWN_Z);
-  g.add(new THREE.Mesh(OG.gate, OG.gateM));
+  g.add(new THREE.Mesh(new THREE.TorusGeometry(9, .55, 8, 48), GM.finish));
   const tex = canvasTex(512, 96, (c, w, h) => {
     c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, 0, w, h); c.fillStyle = '#7fe3ff'; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.font = 'bold 46px system-ui, "Segoe UI", "Malgun Gothic", "Yu Gothic", "Microsoft YaHei", sans-serif'; c.fillText('🏁 ' + label, w / 2, h / 2, w - 30);
   });
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true })); sp.scale.set(14, 2.6, 1); sp.position.y = 11; g.add(sp);
-  return { kind: 'gate', g, boxes: [], tick(dt, t) { g.children[0].rotation.z = t * .5; } };
+  return g;
+}
+let finishObj = null;
+function clearGates() {
+  for (const g of G.gates || []) if (g.obj) { scene.remove(g.obj); disposeGate(g.obj); g.obj = null; }
+  if (finishObj) { scene.remove(finishObj); finishObj = null; }
+}
+// 게이트는 트랙 거리(d)에 고정. 화면 z = 현재 거리 - d. 가까워질 때만 메시를 만들고 지나가면 버린다.
+function syncGates() {
+  for (const g of G.gates) {
+    const z = G.dist - g.d;
+    if (!g.obj && z > -SPAWN_DIST && z < 25) { g.obj = buildGate(g); scene.add(g.obj); }
+    if (g.obj) { g.obj.position.z = z; if (z > 25) { scene.remove(g.obj); disposeGate(g.obj); g.obj = null; } }
+  }
+  const fz = G.dist - G.track.finishD;
+  if (!finishObj && fz > -SPAWN_DIST && fz < 30) { finishObj = makeFinish(G.stage.dest); scene.add(finishObj); }
+  if (finishObj) { finishObj.position.z = fz; finishObj.children[0].rotation.z = G.t * .5; }
+}
+// 가독성: 지금 통과할 게이트는 선명하게, 먼 게이트는 약하게. 값은 부드럽게 따라가 번쩍임 없음
+function styleGates(dt) {
+  const next = G.gates.find(g => !g.resolved && G.dist - g.d < 2);
+  const k = 1 - Math.exp(-dt * 4);
+  for (const g of G.gates) {
+    if (!g.obj) continue;
+    const u = g.obj.userData, D = g.d - G.dist, isNext = g === next;
+    const near = clamp((200 - D) / 160, 0, 1);
+    const tgt = g.resolved ? .12 : isNext ? .6 + .4 * near : .3;
+    u.a += (tgt - u.a) * k;
+    u.edge.opacity = u.a; u.side.opacity = u.a;
+    u.flash = Math.max(0, (u.flash || 0) - dt * 1.6);
+    for (const [m, sideName] of [[u.panelTop, 'top'], [u.panelBot, 'bottom']]) {
+      m.opacity = (isNext ? .58 : .42) * (g.resolved ? .7 : 1);
+      const f = u.flashSide === sideName ? u.flash : 0;   // 피격한 쪽 패널만 붉게 → 실패 원인이 보임
+      m.emissive.setRGB(f * .9, f * .08, f * .05);
+    }
+  }
 }
 
-function clearObstacles() { for (const o of obstacles) scene.remove(o.g); obstacles = []; }
-
-function spawnWave(stage) {
-  const mix = stage.mix, total = mix.sign + mix.bird + mix.drone + mix.balloon;
-  let r = Math.random() * total, kind = 'sign';
-  for (const k of ['sign', 'bird', 'drone', 'balloon']) { if ((r -= mix[k]) < 0) { kind = k; break; } }
-  // 원버튼 게임: 장애물은 모두 비행 경로(x≈0) 위에, 높이만 달라서 위/아래로 피한다
-  // 40% 확률로 현재 높이를 노림 → 높이 조절하는 맛
-  const x = rand(-.8, .8);
-  const y = Math.random() < .4 ? car.position.y + rand(-1, 1) : rand(MIN_Y, MAX_Y);
-  let o;
-  if (kind === 'sign') o = makeSign(x, clamp(y, MIN_Y + 1, MAX_Y - 1.5), stage.signs[(Math.random() * stage.signs.length) | 0]);
-  else if (kind === 'bird') o = makeBirds(x, clamp(y, MIN_Y + .5, MAX_Y));
-  else if (kind === 'drone') o = makeDrone(x, clamp(y, MIN_Y + .5, MAX_Y));
-  else o = makeBalloon(x, Math.random() < .5 ? rand(5.8, 6.4) : rand(10.8, 11.6)); // 낮은 풍선은 위로, 높은 풍선은 아래로 통과 (항상 길이 남게)
-  addObs(o);
-  // 링은 장애물 반대쪽 높이에 → 피하면서 먹는 동선
-  if (Math.random() < .5) addObs(makeRing(0, clamp(y > (MIN_Y + MAX_Y) / 2 ? y - rand(4, 6) : y + rand(4, 6), MIN_Y + .8, MAX_Y - .5)), rand(10, 16));
+// ---------------------------------------------------------------- 디버그 표시 (구멍 / 차량 충돌체 / 판정면 / 도달 범위)
+const dbg = { grp: new THREE.Group(), el: null, built: false };
+scene.add(dbg.grp);
+const wire = color => new THREE.LineBasicMaterial({ color, transparent: true, opacity: .9, depthTest: false });
+function wireBox(w, h, d, mat) { return new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)), mat); }
+function updateDebug() {
+  dbg.grp.visible = DEBUG.on;
+  if (dbg.el) dbg.el.hidden = !DEBUG.on;
+  if (!DEBUG.on) return;
+  if (!dbg.built) {
+    dbg.built = true;
+    dbg.car = wireBox(1.7, PHYS.COL_HALF * 2, 2, wire(0xffe14d)); dbg.grp.add(dbg.car);
+    dbg.planes = GATE.CHECK_Z.map(z => { const m = wireBox(GATE.HALF_W * 2, .02, .02, wire(0xff4040)); m.position.z = z; dbg.grp.add(m); return m; });
+    dbg.holes = Array.from({ length: 4 }, () => { const m = wireBox(1, 1, .6, wire(0x4dff88)); dbg.grp.add(m); return m; });
+    dbg.reach = wireBox(GATE.HALF_W * 2 - .4, 1, .3, wire(0x4da6ff)); dbg.grp.add(dbg.reach);
+    dbg.el = document.createElement('pre'); dbg.el.className = 'debug-readout'; document.body.appendChild(dbg.el);
+  }
+  const yc = car.position.y + PHYS.COL_OFF;
+  dbg.car.position.set(0, yc, 0);
+  dbg.planes.forEach(m => { m.position.y = yc; });
+  const live = G.gates.filter(g => g.obj && !g.resolved).slice(0, 4);
+  dbg.holes.forEach((m, i) => { const g = live[i]; m.visible = !!g; if (g) { m.position.set(0, g.c, G.dist - g.d); m.scale.set(GATE.HALF_W * 2, g.h, 1); } });
+  // 도달 범위: 지금 상태에서 다음 게이트 도착 시각까지 계속 누름 / 계속 뗌으로 갈 수 있는 충돌 중심 높이
+  const next = live[0];
+  dbg.reach.visible = !!next && G.state === 'fly';
+  let txt = `y ${car.position.y.toFixed(2)}  yc ${yc.toFixed(2)}  vy ${G.vy.toFixed(2)}  hold ${isHolding()}\n`;
+  if (next && G.speed > 1) {
+    const T = (next.d - G.dist) / G.speed, hi = { y: car.position.y, vy: G.vy }, lo = { y: car.position.y, vy: G.vy };
+    for (let tt = 0; tt < T; tt += PHYS.STEP) { stepCar(hi, true); stepCar(lo, false); }
+    const a = lo.y + PHYS.COL_OFF, b = hi.y + PHYS.COL_OFF;
+    dbg.reach.position.set(0, (a + b) / 2, G.dist - next.d + .5); dbg.reach.scale.set(1, Math.max(.05, b - a), 1);
+    txt += `next gate #${next.idx}  in ${T.toFixed(2)}s  hole ${holeBottom(next).toFixed(2)}–${holeTop(next).toFixed(2)}  reach ${a.toFixed(2)}–${b.toFixed(2)}\n`;
+  }
+  txt += `gates ${G.gatesPassed}/${G.gates.length}  perfect ${G.perfects}  streak ${G.streak}  inv ${G.inv.toFixed(2)}  fps-step ${G.lastSteps}`;
+  dbg.el.textContent = txt;
 }
-function addObs(o, dz = 0) { o.g.position.z += dz; scene.add(o.g); obstacles.push(o); }
+addEventListener('keydown', e => { if (e.code === 'Backquote') DEBUG.on = !DEBUG.on; });
 
 // ---------------------------------------------------------------- 사운드 (WebAudio 합성, 파일 없음)
 // 모든 소리는 master 를 거친다 → 음소거/일시정지가 지속음(엔진·분사)에도 즉시 적용
@@ -477,12 +509,12 @@ const G = {
   state: 'loading', stageIdx: 0, lap: 0, stage: STAGES[0], score: 0, stageStartScore: 0, lives: 3,
   dist: 0, len: 1500, speed: 0, targetSpeed: 50, gap: 30, nextSpawn: 0, gateSpawned: false,
   t: 0, stateT: 0, inv: 0, shake: 0, camBlend: 0, combo: 0, vy: 0, jet: 0, fromTitle: true,
-  best: store.get('skyroadster.best', 0), tutorialDone: store.get('skyroadster.tutorial', false),
+  best: store.get('skyroadster.best.v2', 0), tutorialDone: store.get('skyroadster.tutorial', false),
 };
 const target = new THREE.Vector2(0, 6);
 const ui = id => document.getElementById(id);
 const UI = {
-  body: document.body, hudStage: ui('hudStage'), hudCity: ui('hudCity'), hudScore: ui('hudScore'), lives: ui('hudLives'),
+  body: document.body, hudStage: ui('hudStage'), hudCity: ui('hudCity'), hudScore: ui('hudScore'), hudGates: ui('hudGates'), lives: ui('hudLives'),
   progFill: ui('progFill'), progMarker: ui('progMarker'), progPct: ui('progPct'), progDest: ui('progDest'), combo: ui('combo'),
   stageTitle: ui('stageTitle'), tutorial: ui('tutorial'), popups: [...ui('popups').children], vignette: ui('vignette'),
   pause: ui('pause'), result: ui('result'), muteBtn: ui('muteBtn'), pauseMuteBtn: ui('pauseMuteBtn'),
@@ -504,12 +536,13 @@ function showStageTitle(kicker, big, sub, sec = 2.6) {
 let tutorialKey = null; // 언어를 바꾸면 보이는 안내도 다시 번역
 function showTutorial(key) { tutorialKey = key; UI.tutorial.textContent = t(key); UI.tutorial.classList.add('show'); }
 function hideTutorial() { UI.tutorial.classList.remove('show'); }
-function showCombo(n) { UI.combo.textContent = `RING ×${n}`; UI.combo.classList.add('show'); later(1.4, () => UI.combo.classList.remove('show'), 'combo'); }
+function showStreak(n) { UI.combo.textContent = `PERFECT ×${n}`; UI.combo.classList.add('show'); later(1.6, () => UI.combo.classList.remove('show'), 'combo'); }
 let popIdx = 0;
 const _scr = new THREE.Vector3();
-function popupAtCar(text) { // 링 점수: 차 위에 작게 떠올랐다 사라짐 (3개 풀 재사용)
+function popupAtCar(text, perfect) { // 통과 점수: 차 위에 작게 떠올랐다 사라짐 (3개 풀 재사용)
   const el = UI.popups[popIdx = (popIdx + 1) % UI.popups.length];
   car.userData.vis.getWorldPosition(_scr); _scr.y += 2.2; _scr.project(camera);
+  el.classList.toggle('perfect', !!perfect);
   el.textContent = text; el.style.left = ((_scr.x + 1) / 2 * innerWidth) + 'px'; el.style.top = ((1 - _scr.y) / 2 * innerHeight) + 'px';
   el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
 }
@@ -530,7 +563,10 @@ function renderLives(lost) {
   UI.lives.setAttribute('aria-label', t('livesAria', { n: Math.max(0, G.lives) }));
   shownLives = G.lives;
 }
+let shownGates = '';
 function updateHUD(prog) {
+  const gt = `GATE ${G.gatesPassed} / ${G.gates.length}`;
+  if (gt !== shownGates) { shownGates = gt; UI.hudGates.textContent = gt; }
   UI.progFill.style.transform = `scaleX(${prog.toFixed(4)})`;
   UI.progMarker.style.left = (prog * 100).toFixed(2) + '%';
   UI.progPct.textContent = Math.floor(prog * 100) + '%';
@@ -540,27 +576,36 @@ function updateHUD(prog) {
 
 // ---------------------------------------------------------------- 스테이지 / 상태 전환
 function setStage(i, keepScore = true, mode = 'intro') {
+  clearGates();
   G.stageIdx = i; G.stage = STAGES[i];
-  const lapBoost = G.lap * 10;
-  G.targetSpeed = 48 + i * 6 + lapBoost; G.len = 1500 + i * 200; G.gap = Math.max(12, 30 - i * 3 - G.lap * 3);
-  G.dist = 0; G.speed = 0; G.nextSpawn = 60; G.gateSpawned = false; G.lives = 3; G.inv = 0; G.combo = 0; G.camBlend = 0;
+  G.track = generateTrack(i, G.lap);  // 패턴 기반 + 도달 가능성 검사를 통과한 배치 (같은 도시는 매번 같은 배치)
+  G.gates = G.track.gates.map(g => ({ ...g, obj: null, resolved: null, center: null }));
+  G.targetSpeed = G.track.params.speed;
+  G.dist = 0; G.speed = 0; G.lives = 3; G.inv = 0; G.camBlend = 0; G.acc = 0; G.hover = 0; G.hitFlash = 0;
+  G.gatesPassed = 0; G.perfects = 0; G.streak = 0; G.bestStreak = 0;
   G.vy = 0; G.jet = 0; G.fromTitle = mode === 'title'; G.flyInput = false;
   if (!keepScore) G.score = 0;
   G.stageStartScore = G.score;
-  clearObstacles(); timers = []; clearMessages();
+  timers = []; clearMessages();
   for (const pt of parts) pt.life = 0; // 이전 추락의 연기·불이 남지 않게
   bgEl.style.backgroundImage = bgImgs[G.stage.id].complete && bgImgs[G.stage.id].naturalWidth ? `url(assets/${G.stage.id}.jpg)` : '';
   applyFog(G.stage);
   ground.material.map = groundTex[G.stage.id]; ground.material.needsUpdate = true;
   car.position.set(0, 0, 0); car.rotation.set(0, 0, 0); car.userData.vis.rotation.set(0, 0, 0); car.userData.vis.position.set(0, 0, 0);
-  car.visible = true; target.set(0, LIFT_Y);
+  car.visible = true; target.set(0, LIFT_Y); setCarTint(0, 1);
   setJets(0, 0, 0);
   UI.hudStage.textContent = `STAGE ${String(i + 1).padStart(2, '0')} / ${String(STAGES.length).padStart(2, '0')}${G.lap ? ' · LAP ' + (G.lap + 1) : ''}`;
   UI.hudCity.textContent = G.stage.name; UI.progDest.textContent = G.stage.dest;
-  renderLives(false); shownScore = -1; updateHUD(0);
+  renderLives(false); shownScore = -1; shownGates = ''; updateHUD(0);
   snapCam = true;
-  setState(mode);
-  if (mode === 'intro') { // 재도전·다음 도시: 도로 위에서 짧게 대기
+  if (mode === 'air') { // 재도전·다음 도시: 이륙 연출 없이 공중에서 바로 (첫 게이트까지 적응 시간 3.2초)
+    setState('fly'); setUI('play');
+    G.speed = G.targetSpeed; G.camBlend = 1;
+    car.position.y = GATE.MID - PHYS.COL_OFF; G.hover = 1.2; G.hoverY = car.position.y; G.jet = .35;
+    showStageTitle(`STAGE ${String(i + 1).padStart(2, '0')}`, G.stage.name, G.stage.dest);
+  } else setState(mode);
+  syncGates();
+  if (mode === 'intro') {
     setUI('play');
     showStageTitle(`STAGE ${String(i + 1).padStart(2, '0')}`, G.stage.name, G.stage.dest);
     showTutorial(isTouch ? 'introTouch' : 'introDesk');
@@ -590,20 +635,51 @@ function wreckSmoke(rate) { // 잔해에서 피어오르는 검은 연기 + 불
   if (Math.random() < rate * .7) emit(car.position.x + rand(-.7, .7), car.position.y * .5 + .3, rand(-1, .5), rand(-.3, .3), rand(1, 2.5), 0, .7, .45, FIRE, .9);
 }
 const carH = () => 2.6 * (texCache.car_player.aspect || .6); // 뒤집혔을 때 지붕이 노면에 닿는 높이
-function hit() {
-  G.lives--; G.inv = 1.6; G.shake = .6; G.combo = 0;
-  Sfx.noise(.35, .4); Sfx.tone(220, 60, .4, 'square', .12);
-  for (let i = 0; i < 18; i++) emit(car.position.x, car.position.y + .6, 0, rand(-8, 8), rand(-5, 8), rand(-8, 8), 1.2, .8);
+function setCarTint(red, alpha) { // 피격: 차를 숨기지 않고 짧게 붉게 + 살짝 반투명
+  const m = texCache.car_player.mat; m.color.setRGB(1, 1 - red * .55, 1 - red * .6); m.opacity = alpha;
+}
+// 게이트 통과(모든 판정면을 구멍 안에서 지남) → +100, PERFECT 면 +50 추가
+function passGate(g) {
+  const perfect = Math.abs(g.center) <= GATE.PERFECT * safeHalf(g);
+  g.resolved = perfect ? 'perfect' : 'pass';
+  G.gatesPassed++;
+  if (perfect) {
+    G.perfects++; G.streak++; G.bestStreak = Math.max(G.bestStreak, G.streak);
+    G.score += 150; popupAtCar('PERFECT +150', true);
+    const up = Math.pow(1.06, Math.min(G.streak - 1, 6)); // 연속 PERFECT 는 소리만 조금씩 밝아짐 (속도·물리 불변)
+    Sfx.tone(1046 * up, 1568 * up, .16, 'sine', .12); Sfx.tone(1568 * up, 2093 * up, .12, 'triangle', .05, .06);
+    if (G.streak >= 2) showStreak(G.streak);
+  } else {
+    G.streak = 0; G.score += 100; popupAtCar('+100');
+    Sfx.tone(820, 980, .09, 'sine', .08);
+  }
+}
+// 패널 충돌: 목숨 -1, 짧은 무적, 같은 게이트 재피해 없음, 큰 넉백 없음(구멍 쪽으로 살짝만)
+const INV_TIME = 1.0, RECOVER_DELAY = .6;
+function hitGate(g, yc) {
+  g.resolved = 'hit';
+  const side = yc > g.c ? 'top' : 'bottom';
+  G.lives--; G.inv = INV_TIME; G.shake = .35; G.streak = 0; G.hitFlash = .35;
+  G.vy = side === 'top' ? Math.min(G.vy, -1.5) : Math.max(G.vy, 1.5);
+  if (g.obj) { g.obj.userData.flash = 1; g.obj.userData.flashSide = side; }
+  const ey = side === 'top' ? holeTop(g) : holeBottom(g);
+  for (let i = 0; i < 16; i++) emit(rand(-1.2, 1.2), ey, .3, rand(-7, 7), rand(-3, 3) + (side === 'top' ? -2 : 2), rand(2, 7), .3, .45, FIRE, .95);
+  Sfx.noise(.3, .35); Sfx.tone(220, 70, .35, 'square', .1);
   UI.vignette.classList.remove('hit'); void UI.vignette.offsetWidth; UI.vignette.classList.add('hit');
   UI.combo.classList.remove('show');
   renderLives(true);
+  // 회복 구간: 아직 생성되지 않은(보이지 않는) 다음 게이트들만 조금 뒤로 → 보이는 게이트는 그대로
+  const extra = RECOVER_DELAY * G.targetSpeed;
+  for (const n of G.gates) if (!n.obj && n.d - G.dist > SPAWN_DIST) n.d += extra;
+  if (!finishObj) G.track.finishD += extra;
   if (G.lives <= 0) gameOver();
 }
-// 신기록 표시는 '기존 기록을 넘었을 때'만 (첫 판은 기록 저장만)
-function saveBest() { const beat = G.score > G.best; const isNew = beat && G.best > 0; if (beat) { G.best = G.score; store.set('skyroadster.best', G.best); } return isNew; }
+// 신기록 표시는 '기존 기록을 넘었을 때'만 (첫 판은 기록 저장만). 게이트 점수 체계라 저장 키를 버전 분리
+const BEST_KEY = 'skyroadster.best.v2';
+function saveBest() { const beat = G.score > G.best; const isNew = beat && G.best > 0; if (beat) { G.best = G.score; store.set(BEST_KEY, G.best); } return isNew; }
 function stageClear() {
   setState('clear');
-  const bonus = 500 + G.lives * 200; G.score += bonus;
+  const bonus = G.lives * 100; G.score += bonus; // 점수의 주된 이유는 게이트 통과, 도착 보너스는 작게
   Sfx.tone(523, 523, .15, 'triangle', .15); Sfx.tone(659, 659, .15, 'triangle', .15, .15); Sfx.tone(784, 784, .15, 'triangle', .15, .3); Sfx.tone(1046, 1046, .4, 'triangle', .15, .45);
   hideTutorial(); UI.combo.classList.remove('show');
   showStageTitle('ARRIVED', G.stage.name, G.stage.dest, 1.6);
@@ -614,9 +690,9 @@ function stageClear() {
       kicker: last ? 'WORLD TOUR COMPLETE' : `STAGE ${String(G.stageIdx + 1).padStart(2, '0')} CLEAR`,
       title: t('arrivedTitle', { city: G.stage.name }), sub: t('arrivedSub', { dest: G.stage.dest }),
       score: G.score, isNew,
-      meta: [[t('bonus'), '+' + bonus.toLocaleString()], [t('livesLeft'), `${G.lives} / 3`], isNew ? [t('prevBest'), Math.floor(prevBest).toLocaleString()] : [t('best'), Math.floor(G.best).toLocaleString()]],
+      meta: [[t('gatesLbl'), `${G.gatesPassed} / ${G.gates.length}`], ['PERFECT', `${G.perfects}`], [t('bonus'), '+' + bonus.toLocaleString()], isNew ? [t('prevBest'), Math.floor(prevBest).toLocaleString()] : [t('best'), Math.floor(G.best).toLocaleString()]],
       primary: last ? t('nextLap') : t('nextCity', { city: STAGES[G.stageIdx + 1].name }),
-      onPrimary: () => { if (last) { G.lap++; setStage(0); } else setStage(G.stageIdx + 1); },
+      onPrimary: () => { if (last) { G.lap++; setStage(0, true, 'air'); } else setStage(G.stageIdx + 1, true, 'air'); },
     });
   }, 'result');
 }
@@ -629,16 +705,16 @@ function gameOver() {
   const fallT = (G.vy + Math.sqrt(G.vy * G.vy + 2 * GRAVITY * Math.max(0, car.position.y - carH()))) / GRAVITY;
   car.rotation.set(0, 0, 0); car.userData.vis.rotation.set(0, 0, 0); car.userData.vis.position.set(0, 0, 0);
   G.spinTo = dir * Math.PI * 3; G.spin = G.spinTo / fallT; G.vx = dir * 1.2;
-  G.inv = 0; car.visible = true; // 깜빡임 중이어도 추락 장면은 항상 보이게
+  G.inv = 0; car.visible = true; setCarTint(0, 1);
   for (const tr of traffic) if (Math.abs(tr.x - car.position.x) < 2.8 && tr.z > -16 && tr.z < 13) tr.z -= SPAN * .5;
   hideTutorial(); cancel('stageTitle'); UI.stageTitle.classList.remove('show'); UI.combo.classList.remove('show');
-  const pct = Math.round(clamp(G.dist / G.len, 0, 1) * 100);
-  later(2.0, () => openResult({ // 추락 장면을 본 뒤 결과
+  const pct = Math.round(clamp(G.dist / G.track.finishD, 0, 1) * 100);
+  later(1.5, () => openResult({ // 짧은 추락 연출 후 바로 결과 // 추락 장면을 본 뒤 결과
     kicker: `CRASHED · ${G.stage.name}`, title: 'GAME OVER', sub: t('overSub', { dest: G.stage.dest, n: 100 - pct }),
     score: G.score, isNew,
-    meta: [[t('reached'), `${G.stage.name} ${pct}%`], isNew ? [t('prevBest'), Math.floor(prevBest).toLocaleString()] : [t('best'), Math.floor(G.best).toLocaleString()]],
+    meta: [[t('reached'), `${G.stage.name} ${pct}%`], [t('gatesLbl'), `${G.gatesPassed} / ${G.gates.length}`], isNew ? [t('prevBest'), Math.floor(prevBest).toLocaleString()] : [t('best'), Math.floor(G.best).toLocaleString()]],
     primary: t('retry'),
-    onPrimary: () => { G.score = G.stageStartScore; setStage(G.stageIdx); },
+    onPrimary: () => { G.score = G.stageStartScore; setStage(G.stageIdx, true, 'air'); }, // 빠른 재도전: 랜딩·이륙 반복 없음
   }), 'result');
 }
 
@@ -765,16 +841,6 @@ addEventListener('blur', () => clearInput(false));
 document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(false); pause(); } });
 
 // ---------------------------------------------------------------- 업데이트
-const carBox = [0, 0, 0, .85, .45, 2.0];
-function collides(o) {
-  const cx = car.position.x, cy = car.position.y + .65, sc = o.g.scale.x;
-  for (const b of o.boxes) {
-    const bx = o.g.position.x + b[0] * sc, by = o.g.position.y + b[1] * sc, bz = o.g.position.z + b[2] * sc;
-    if (Math.abs(cx - bx) < carBox[3] + b[3] * sc * .9 && Math.abs(cy - by) < carBox[4] + b[4] * sc * .9 && Math.abs(bz) < carBox[5] + b[5] * sc) return true;
-  }
-  return false;
-}
-
 // 카메라: 목표 자세를 계산한 뒤 부드럽게 따라감(상승·하강이 느껴지는 지연). 흔들림은 마지막에만 더함
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), camSm = new THREE.Vector3(), lookSm = new THREE.Vector3();
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
@@ -791,11 +857,39 @@ function titleViewOffset() { // 텍스트가 차량을 가리지 않게 화면 �
   return [-(H < 520 ? .17 : .14) * W, -.02 * H];
 }
 
+// 고정 시간 간격 시뮬레이션: 물리 · 전진 · 게이트 판정 (프레임 속도와 무관, 저프레임에서도 판정 누락 없음)
+const _cs = { y: 0, vy: 0 }, LAST_PLANE = GATE.CHECK_Z[GATE.CHECK_Z.length - 1];
+function simStep(h) {
+  const holding = isHolding();
+  const yPrev = car.position.y;
+  if (G.hover > 0) { G.hover = holding ? 0 : G.hover - h; G.vy = 0; } // 공중 시작: 첫 입력 전 잠깐 호버
+  else { _cs.y = car.position.y; _cs.vy = G.vy; stepCar(_cs, holding, h); car.position.y = _cs.y; G.vy = _cs.vy; }
+  G.speed += (G.targetSpeed - G.speed) * Math.min(1, h * 2);
+  const dz = G.speed * h; G.frameDz += dz;
+  const ycPrev = yPrev + PHYS.COL_OFF, ycNew = car.position.y + PHYS.COL_OFF;
+  for (const g of G.gates) { // d 순으로 정렬되어 있음
+    if (g.resolved) continue;
+    const zPrev = G.dist - g.d;
+    if (zPrev < -40) break;
+    // 이전 스텝 → 현재 스텝 이동 구간으로 판정. 게이트당 결과는 한 번만 (통과 or 피격 or 무적 관통)
+    for (const e of sweepPlanes(zPrev, zPrev + dz, ycPrev, ycNew, g)) {
+      if (!e.ok) { if (G.inv > 0) g.resolved = 'ghost'; else hitGate(g, e.yc); break; } // 무적 관통은 보상·피해 없음
+      if (e.plane === 0) g.center = e.yc - g.c;
+      if (e.plane === LAST_PLANE) passGate(g);
+    }
+    if (G.state !== 'fly') return;
+  }
+  G.dist += dz;
+  G.inv = Math.max(0, G.inv - h);
+  if (G.dist >= G.track.finishD) stageClear();
+}
+
 function update(dt) {
   G.t += dt; G.stateT += dt; const t = G.t;
   runTimers();
   const vis = car.userData.vis;
   const holding = isHolding();
+  G.frameDz = 0; G.lastSteps = 0;
 
   if (G.state === 'title' || G.state === 'intro') {
     G.speed = 0;
@@ -809,46 +903,46 @@ function update(dt) {
     const k = Math.min(1, G.stateT / 2.4);
     car.position.y = ease(k) * LIFT_Y;
     G.speed = G.targetSpeed * k * k;
+    G.frameDz = G.speed * dt; G.dist += G.frameDz; // 세상과 게이트가 함께 다가옴 (첫 게이트는 아직 멀다)
     G.camBlend = ease(k);
     G.jet = Math.min(1, G.jet + dt * 8); // 자동 이륙 시퀀스는 최대 분사 유지
     setJets(G.jet, k * .35, t);
     vis.position.y *= .9; vis.rotation.x += (.06 * (1 - k) - vis.rotation.x) * Math.min(1, dt * 6);
-    // 이륙 순간: 노면에 부딪힌 증기가 옆으로 크게 퍼짐
     if (car.position.y < 2.5) for (const j of car.userData.jets) {
       if (Math.random() < .55) { _tip.set(0, 0, 0); j.localToWorld(_tip); emit(_tip.x, .3, _tip.z, rand(-10, 10), rand(.3, 2), rand(-7, 4), 1.8, 1.6); }
     } else jetSteam(.6, 1.1, 1.1, 2);
     if (k > .7 && UI.body.dataset.ui === 'launch') setUI('play'); // 랜딩 → HUD 로 자연스럽게
     if (k >= 1) {
-      setState('fly'); G.prevHold = holding;
+      setState('fly'); G.vy = 0; G.acc = 0; G.prevHold = holding;
       if (!G.tutorialDone) showTutorial('howto');
     }
   } else if (G.state === 'fly') {
-    // 누르고 있으면 추력 > 중력 → 상승, 떼면 하강 (물리는 기존 그대로)
-    G.vy = clamp(G.vy + (holding ? THRUST : -FALL) * dt, -9, 8);
-    car.position.y += G.vy * dt;
-    if (car.position.y < MIN_Y) { car.position.y = MIN_Y; G.vy = Math.max(0, G.vy); }   // 차 지붕 위 최저 고도
-    if (car.position.y > MAX_Y) { car.position.y = MAX_Y; G.vy = Math.min(0, G.vy); }
-    target.y = car.position.y;
-    G.speed += (G.targetSpeed - G.speed) * Math.min(1, dt * 2);
-    G.dist += G.speed * dt; G.score += Math.round(G.speed * dt * .2 * 10) / 10;
-    if (!G.gateSpawned && G.dist >= G.nextSpawn && G.dist < G.len + SPAWN_Z - 40) { spawnWave(G.stage); G.nextSpawn = G.dist + G.gap * rand(.7, 1.3); }
-    if (!G.gateSpawned && G.dist >= G.len + SPAWN_Z) { G.gateSpawned = true; addObs(makeGate(G.stage.dest)); }
-    G.inv = Math.max(0, G.inv - dt);
-    // 분사: 누르는 즉시 점화, 떼면 중심부가 빠르게 줄어듦 (이미 나온 증기는 파티클로 흩어짐)
-    const jt = holding ? 1 : 0;
-    G.jet += (jt - G.jet) * Math.min(1, dt * (jt > G.jet ? 30 : 9));
-    setJets(G.jet, .35 + G.speed / 400, t);
-    jetSteam(.55 * G.jet, 1, 1, 1.5);
-    // 자세: 실제 수직 속도로 기수 들림/숙임 (평면 자산이 종이처럼 보이지 않게 작은 각도만)
-    vis.rotation.x += (clamp(G.vy * .011, -.08, .08) - vis.rotation.x) * Math.min(1, dt * 8);
-    vis.rotation.z = RM ? 0 : Math.sin(t * 1.7) * .012;
-    vis.position.y = RM ? 0 : Math.sin(t * 2.3) * .03;
-    car.visible = G.inv <= 0 || (t * 12 | 0) % 2 === 0;
-    // 튜토리얼: 조작을 시작(누름/뗌 변화)하면 사라지고 다시는 안 나옴
-    if (!G.tutorialDone && holding !== G.prevHold) { G.tutorialDone = true; store.set('skyroadster.tutorial', true); hideTutorial(); }
-    G.prevHold = holding;
+    G.acc += dt;
+    while (G.acc >= PHYS.STEP && G.state === 'fly') { simStep(PHYS.STEP); G.acc -= PHYS.STEP; G.lastSteps++; }
+    if (G.state === 'fly') {
+      // 분사: 누르는 즉시 점화, 떼면 중심부가 빠르게 꺼짐 (이미 나온 증기는 파티클로 흩어짐)
+      const jt = holding ? 1 : G.hover > 0 ? .35 : 0;
+      G.jet += (jt - G.jet) * Math.min(1, dt * (jt > G.jet ? 30 : 9));
+      setJets(G.jet, .35 + G.speed / 400, t);
+      jetSteam(.55 * G.jet, 1, 1, 1.5);
+      // 자세: 실제 수직 속도로 기수 들림/숙임 (장식 전용 그룹 — 충돌 위치와 분리, 작은 각도만)
+      vis.rotation.x += (clamp(G.vy * .011, -.08, .08) - vis.rotation.x) * Math.min(1, dt * 8);
+      vis.rotation.z = RM ? 0 : Math.sin(t * 1.7) * .01;
+      vis.position.y = RM ? 0 : Math.sin(t * 2.3) * .02;
+      // 피격: 숨기지 않고 짧은 붉은 기 + 무적 동안 아주 약한 투명 맥동
+      G.hitFlash = Math.max(0, G.hitFlash - dt);
+      if (G.inv > 0) setCarTint(G.hitFlash / .35, .78 + .22 * Math.cos(t * 16));
+      else if (G.hitFlashOn !== false) setCarTint(0, 1);
+      G.hitFlashOn = G.inv > 0;
+      // 튜토리얼: 조작을 시작(누름/뗌 변화)하면 사라지고, 한 번만 '구멍 높이에 맞춰 통과' 안내
+      if (!G.tutorialDone && holding !== G.prevHold) {
+        G.tutorialDone = true; store.set('skyroadster.tutorial', true); hideTutorial();
+        if (!store.get('skyroadster.tutorial2', false)) { store.set('skyroadster.tutorial2', true); showTutorial('gateHint'); later(3.2, hideTutorial, 'tut2'); }
+      }
+      G.prevHold = holding;
+    }
   } else if (G.state === 'clear') {
-    G.speed *= 1 - dt * .8; target.y = Math.min(MAX_Y + 4, target.y + dt * 4);
+    G.speed *= 1 - dt * .8; target.y = Math.min(PHYS.MAX_Y + 4, target.y + dt * 4);
     car.position.y += (target.y - car.position.y) * Math.min(1, dt * 6);
     G.jet += (.8 - G.jet) * Math.min(1, dt * 6); setJets(G.jet, .4, t); jetSteam(.4, 1, 1, 1.5);
     vis.rotation.x += (.05 - vis.rotation.x) * Math.min(1, dt * 4);
@@ -874,6 +968,7 @@ function update(dt) {
       wreckSmoke(.8);
     }
   }
+  if (G.state === 'clear' || G.state === 'over') { G.frameDz = G.speed * dt; G.dist += G.frameDz; }
   car.userData.shadow.visible = car.position.y < 2;
   // 후미등: 대기 중에는 은은하게 숨쉬고, 비행 중에는 일정
   const tail = car.userData.tail;
@@ -882,7 +977,7 @@ function update(dt) {
   if (G.state === 'title') sun.intensity = 1.6 + Math.sin(t * .35) * .12; // 배경 조명의 절제된 변화
 
   // 월드 스크롤 (차는 z=0 에 고정, 세상이 +z 로 흐름)
-  const dz = G.speed * dt;
+  const dz = G.frameDz;
   updateTraffic(dz);
   if (ground.material.map) ground.material.map.offset.y += dz / GROUND_TILE;
   for (const c of clouds) { c.position.z += dz * .9; if (c.position.z > 20) placeCloud(c, SPAWN_Z - 20); }
@@ -890,30 +985,15 @@ function update(dt) {
   streaks.visible = G.state === 'fly';
   streakData.forEach((s, i) => { s.z += dz * 1.4; if (s.z > 12) resetStreak(s); sp.set([s.x, s.y, s.z, s.x, s.y, s.z - len], i * 6); });
   streakGeo.attributes.position.needsUpdate = true;
-  updateParticles(dt, G.speed * .5);
+  updateParticles(dt, dt > 0 ? dz / dt * .5 : 0);
+  syncGates(); styleGates(dt);
 
-  // 장애물
-  for (let i = obstacles.length - 1; i >= 0; i--) {
-    const o = obstacles[i];
-    o.g.position.z += dz; o.tick?.(dt, t);
-    if (G.state === 'fly') {
-      if (o.kind === 'ring' && !o.got && Math.abs(o.g.position.z) < 1.5) {
-        if (Math.hypot(o.g.position.x - car.position.x, o.g.position.y - car.position.y - .6) < 2.4) {
-          o.got = true; G.combo++; G.score += 100 * G.combo; o.g.visible = false;
-          Sfx.tone(660, 1320, .18, 'sine', .15);
-          popupAtCar('+' + 100 * G.combo);
-          if (G.combo > 1) showCombo(G.combo);
-        } else if (o.g.position.z > 1.4) { o.got = true; G.combo = 0; }
-      } else if (o.kind === 'gate' && o.g.position.z > 0) { stageClear(); }
-      else if (G.inv <= 0 && o.boxes.length && Math.abs(o.g.position.z) < 12 && collides(o)) hit();
-    }
-    if (o.g.position.z > 25) { scene.remove(o.g); obstacles.splice(i, 1); }
-  }
-
-  // 카메라 목표: 지상(랜딩 or 도로 대기) ↔ 비행 추적 블렌드
+  // 카메라 목표: 지상(랜딩 or 도로 대기) ↔ 비행 추적. 비행 중 높이 추적은 절반쯤만 → 구멍 위치가 화면에서 덜 흔들림
   if (G.fromTitle) titlePose(tmpA, tmpB); else { tmpA.set(0, 2.4, 8.5); tmpB.set(0, 1.2, -15); }
-  camPos.copy(tmpA).lerp(_p.set(car.position.x * .55, car.position.y + 2.8, 11.5), G.camBlend);
-  camLook.copy(tmpB).lerp(_s.set(car.position.x * .8, car.position.y + .5, -25), G.camBlend);
+  const camY = car.position.y + (GATE.MID - PHYS.COL_OFF - car.position.y) * .35;
+  // 차는 화면 아래쪽, 다음 구멍은 그 위로 → 차가 구멍을 가리지 않게 약간 높고 뒤에서
+  camPos.copy(tmpA).lerp(_p.set(0, camY + 3.4, 13), G.camBlend);
+  camLook.copy(tmpB).lerp(_s.set(0, camY + 1.1, -40), G.camBlend);
   if (G.state === 'over') { // 추락 카메라: 옆으로 빠지며 뒤집힌 잔해를 내려다봄
     const k = ease(Math.min(1, G.stateT * 1.5));
     camPos.lerp(tmpA.set(car.position.x + 2.4, 3.6, 7), k); camLook.lerp(tmpB.set(car.position.x, 1, -1), k);
@@ -921,7 +1001,7 @@ function update(dt) {
   if (snapCam) { camSm.copy(camPos); lookSm.copy(camLook); snapCam = false; }
   else { camSm.lerp(camPos, 1 - Math.exp(-dt * 5)); lookSm.lerp(camLook, 1 - Math.exp(-dt * 7)); }
   camera.position.copy(camSm);
-  if (G.shake > 0) { G.shake -= dt; const a = (RM ? .08 : .4) * G.shake; camera.position.x += rand(-a, a); camera.position.y += rand(-a, a); }
+  if (G.shake > 0) { G.shake -= dt; const a = (RM ? .05 : .25) * G.shake; camera.position.x += rand(-a, a); camera.position.y += rand(-a, a); }
   camera.lookAt(lookSm);
   // 랜딩 구도(view offset)는 이륙하며 0으로 풀린다
   const off = G.fromTitle ? 1 - G.camBlend : 0;
@@ -929,9 +1009,10 @@ function update(dt) {
   else if (camera.view && camera.view.enabled) camera.clearViewOffset();
 
   // 배경 사진: 사진의 지면선을 3D 지평선에 고정 + 목적지에 가까워질수록 확대
-  const prog = clamp(G.dist / G.len, 0, 1);
+  const prog = clamp(G.dist / G.track.finishD, 0, 1);
   layoutBg(1 + prog * .35);
   if (G.state !== 'title') updateHUD(prog);
+  updateDebug();
   const flying = G.state === 'fly' || G.state === 'liftoff';
   Sfx.engine(flying ? 1 : G.state === 'intro' ? .3 : G.state === 'clear' ? .6 : 0, G.speed);
   Sfx.jetLevel(G.state === 'over' ? 0 : G.jet);
@@ -979,7 +1060,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(.05, (now - last) / 1000); last = now;
   if (!booted) return;
-  if (!paused) update(dt);
+  if (!paused && !window.__freeze) update(dt);
   renderer.render(scene, camera);
 }
 const initialLang = detectLang();
@@ -990,4 +1071,6 @@ requestAnimationFrame(loop);
 window.__srBooted = true;
 // 디버그/테스트용 훅
 window.__G = G;
-window.__dbg = { car, hold: v => { testHold = v; }, crash: () => gameOver(), clear: () => stageClear() };
+window.__dbg = { car, hold: v => { testHold = v; }, crash: () => gameOver(), clear: () => stageClear(),
+  step: (dt, n = 1) => { for (let k = 0; k < n; k++) update(dt); renderer.render(scene, camera); },
+  freeze: v => { window.__freeze = v; }, restart: (i = 0) => { closeResult(); setStage(i, false, 'air'); } };

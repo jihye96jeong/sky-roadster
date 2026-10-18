@@ -82,6 +82,8 @@ const D = {
     zh: '路线：首尔、伦敦、巴黎、迪拜、悉尼、纽约', es: 'Ruta: Seúl, Londres, París, Dubái, Sídney, Nueva York', fr: 'Itinéraire : Séoul, Londres, Paris, Dubaï, Sydney, New York' },
   retryLoad: { ko: '다시 시도', en: 'Retry', ja: '再試行', zh: '重试', es: 'Reintentar', fr: 'Réessayer' },
   assetFail: { ko: '필수 자산을 불러오지 못했습니다.', en: "Couldn't load required assets.", ja: '必要なアセットを読み込めませんでした。', zh: '无法加载必要资源。', es: 'No se pudieron cargar los recursos.', fr: 'Impossible de charger les ressources.' },
+  gatesLbl: { ko: '통과 게이트', en: 'Gates', ja: '通過ゲート', zh: '通过闸门', es: 'Puertas', fr: 'Portes' },
+  gateHint: { ko: '게이트 구멍 높이에 맞춰 통과', en: 'Match the height of the gate opening', ja: 'ゲートの開口部の高さに合わせて通過', zh: '对准闸门开口的高度穿过', es: 'Ajusta tu altura a la abertura de la puerta', fr: 'Alignez-vous sur l’ouverture de la porte' },
   langLabel: { ko: '언어', en: 'Language', ja: '言語', zh: '语言', es: 'Idioma', fr: 'Langue' },
 };
 // 목적지(랜드마크) 이름

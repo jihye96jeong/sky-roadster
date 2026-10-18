@@ -43,6 +43,11 @@ for _c, _d in {"seoul": "Seoul apartment blocks and roads at golden sunset light
                "newyork": "Manhattan grid streets and rooftops at night with glowing street lights"}.items():
     ASSETS["ground_" + _c] = _d + "." + AERIAL
 
+# SKY GATE 금속 표면 (타일링 텍스처, 텍스트·UI 없음 — 구멍 치수/형태는 코드가 결정)
+ASSETS["tex_gate_metal"] = ("Seamless tileable texture, dark gunmetal brushed metal panel with fine horizontal vent slots, "
+                            "subtle panel seams and tiny bolts, flat even studio lighting, orthographic straight-on view, "
+                            "no perspective, no text, no logos, photorealistic material sample.")
+
 
 GREEN = (" Photorealistic studio product photo, entire vehicle visible and centered with margin, "
          "isolated on a flat solid pure green (#00FF00) chroma key background, no text, no people, no smoke.")
@@ -163,7 +168,7 @@ def make(key, name):
                 img = chroma_key(raw, glass=name.startswith("car_"))
             path = os.path.join(OUT, f"{name}.webp"); img.save(path, "WEBP", quality=86, method=6)
         else:
-            ground = name.startswith("ground_")
+            ground = name.startswith(("ground_", "tex_"))
             img = Image.open(io.BytesIO(generate(key, ASSETS[name], aspect="1:1" if ground else "16:9"))).convert("RGB")
             img.thumbnail((512, 512) if ground else (1280, 1280))  # 가볍게: 최대 1280px, JPEG q72
             path = os.path.join(OUT, f"{name}.jpg"); img.save(path, "JPEG", quality=72, optimize=True, progressive=True)
