@@ -1,5 +1,6 @@
 // SKY ROADSTER — 가벼운 3D 원버튼 게임 (three.js 하나만 사용, 실사 스프라이트는 xAI로 미리 생성한 자산)
 import * as THREE from 'three';
+import { LANGS, detectLang, setLang, getLang, t, destName, applyStatic } from './i18n.js';
 
 // ---------------------------------------------------------------- 로딩 추적 (깨진 차량/빈 배경을 보여주지 않기 위해)
 // TextureLoader 는 DefaultLoadingManager 를 쓰므로, 텍스처 로드를 시작하기 전에 훅을 단다
@@ -12,13 +13,15 @@ const RM = matchMedia('(prefers-reduced-motion: reduce)').matches; // 장식용 
 // ---------------------------------------------------------------- 스테이지 데이터
 // hz: 배경 사진에서 도시가 땅/물과 만나는 높이 비율 → 3D 지평선에 맞춘다
 const STAGES = [
-  { id: 'seoul',   name: 'SEOUL',    dest: 'N서울타워',          hz: .86, signs: ['강남 Gangnam', '여의도 Yeouido', '종로 Jongno', '한남대교'],              mix: { sign: 4, bird: 3, drone: 1, balloon: 0 } },
-  { id: 'london',  name: 'LONDON',   dest: '빅벤 Big Ben',       hz: .885, signs: ['Westminster', 'Tower Bridge', 'Camden Town', 'A4 Piccadilly'],       mix: { sign: 3, bird: 3, drone: 2, balloon: 1 } },
-  { id: 'paris',   name: 'PARIS',    dest: '에펠탑 Tour Eiffel', hz: .9, signs: ['Champs-Élysées', 'Montmartre', 'Louvre', 'Périphérique'],          mix: { sign: 2, bird: 4, drone: 1, balloon: 3 } },
-  { id: 'dubai',   name: 'DUBAI',    dest: '부르즈 할리파',       hz: .97, signs: ['Sheikh Zayed Rd', 'Downtown', 'Palm Jumeirah', 'Dubai Marina'],     mix: { sign: 3, bird: 2, drone: 4, balloon: 1 } },
-  { id: 'sydney',  name: 'SYDNEY',   dest: '오페라 하우스',       hz: .775, signs: ['Harbour Bridge', 'Bondi Beach', 'Circular Quay', 'Darling Harbour'], mix: { sign: 2, bird: 4, drone: 2, balloon: 2 } },
-  { id: 'newyork', name: 'NEW YORK', dest: '엠파이어 스테이트',   hz: .955, signs: ['Broadway', 'Times Sq', 'Brooklyn Br', '5th Ave'],                     mix: { sign: 3, bird: 3, drone: 3, balloon: 2 } },
+  { id: 'seoul',   name: 'SEOUL',    hz: .86, signs: ['강남 Gangnam', '여의도 Yeouido', '종로 Jongno', '한남대교'],              mix: { sign: 4, bird: 3, drone: 1, balloon: 0 } },
+  { id: 'london',  name: 'LONDON',   hz: .885, signs: ['Westminster', 'Tower Bridge', 'Camden Town', 'A4 Piccadilly'],       mix: { sign: 3, bird: 3, drone: 2, balloon: 1 } },
+  { id: 'paris',   name: 'PARIS',    hz: .9, signs: ['Champs-Élysées', 'Montmartre', 'Louvre', 'Périphérique'],          mix: { sign: 2, bird: 4, drone: 1, balloon: 3 } },
+  { id: 'dubai',   name: 'DUBAI',    hz: .97, signs: ['Sheikh Zayed Rd', 'Downtown', 'Palm Jumeirah', 'Dubai Marina'],     mix: { sign: 3, bird: 2, drone: 4, balloon: 1 } },
+  { id: 'sydney',  name: 'SYDNEY',   hz: .775, signs: ['Harbour Bridge', 'Bondi Beach', 'Circular Quay', 'Darling Harbour'], mix: { sign: 2, bird: 4, drone: 2, balloon: 2 } },
+  { id: 'newyork', name: 'NEW YORK', hz: .955, signs: ['Broadway', 'Times Sq', 'Brooklyn Br', '5th Ave'],                     mix: { sign: 3, bird: 3, drone: 3, balloon: 2 } },
 ];
+// 목적지 이름은 현재 언어로 (i18n.js)
+STAGES.forEach(st => Object.defineProperty(st, 'dest', { get: () => destName(st.id) }));
 // 비행 고도: 정체된 차 지붕(~2.3m) 바로 위를 낮게 난다
 const SPAWN_Z = -260, MIN_Y = 3, MAX_Y = 12, LIFT_Y = 5, THRUST = 26, FALL = 17;
 
@@ -364,7 +367,7 @@ function makeGate(label) {
   g.add(new THREE.Mesh(OG.gate, OG.gateM));
   const tex = canvasTex(512, 96, (c, w, h) => {
     c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, 0, w, h); c.fillStyle = '#7fe3ff'; c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.font = 'bold 46px "Malgun Gothic", system-ui'; c.fillText('🏁 ' + label, w / 2, h / 2, w - 30);
+    c.font = 'bold 46px system-ui, "Segoe UI", "Malgun Gothic", "Yu Gothic", "Microsoft YaHei", sans-serif'; c.fillText('🏁 ' + label, w / 2, h / 2, w - 30);
   });
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true })); sp.scale.set(14, 2.6, 1); sp.position.y = 11; g.add(sp);
   return { kind: 'gate', g, boxes: [], tick(dt, t) { g.children[0].rotation.z = t * .5; } };
@@ -498,7 +501,8 @@ function showStageTitle(kicker, big, sub, sec = 2.6) {
   UI.stageTitle.innerHTML = `<span>${kicker}</span><strong>${big}</strong><em>${sub}</em>`;
   UI.stageTitle.classList.add('show'); later(sec, () => UI.stageTitle.classList.remove('show'), 'stageTitle');
 }
-function showTutorial(text) { UI.tutorial.textContent = text; UI.tutorial.classList.add('show'); }
+let tutorialKey = null; // 언어를 바꾸면 보이는 안내도 다시 번역
+function showTutorial(key) { tutorialKey = key; UI.tutorial.textContent = t(key); UI.tutorial.classList.add('show'); }
 function hideTutorial() { UI.tutorial.classList.remove('show'); }
 function showCombo(n) { UI.combo.textContent = `RING ×${n}`; UI.combo.classList.add('show'); later(1.4, () => UI.combo.classList.remove('show'), 'combo'); }
 let popIdx = 0;
@@ -523,7 +527,7 @@ function renderLives(lost) {
     if (lost && i === G.lives) { el.classList.remove('lost'); void el.offsetWidth; el.classList.add('lost'); }
     if (!lost) el.classList.remove('lost');
   });
-  UI.lives.setAttribute('aria-label', `남은 목숨 ${Math.max(0, G.lives)}개`);
+  UI.lives.setAttribute('aria-label', t('livesAria', { n: Math.max(0, G.lives) }));
   shownLives = G.lives;
 }
 function updateHUD(prog) {
@@ -559,7 +563,7 @@ function setStage(i, keepScore = true, mode = 'intro') {
   if (mode === 'intro') { // 재도전·다음 도시: 도로 위에서 짧게 대기
     setUI('play');
     showStageTitle(`STAGE ${String(i + 1).padStart(2, '0')}`, G.stage.name, G.stage.dest);
-    showTutorial(isTouch ? '화면을 눌러 이륙' : 'SPACE로 이륙');
+    showTutorial(isTouch ? 'introTouch' : 'introDesk');
   }
 }
 function setState(s) { G.state = s; G.stateT = 0; }
@@ -608,10 +612,10 @@ function stageClear() {
     const last = G.stageIdx === STAGES.length - 1;
     openResult({
       kicker: last ? 'WORLD TOUR COMPLETE' : `STAGE ${String(G.stageIdx + 1).padStart(2, '0')} CLEAR`,
-      title: `${G.stage.name} 도착`, sub: `${G.stage.dest}에 착륙했습니다`,
+      title: t('arrivedTitle', { city: G.stage.name }), sub: t('arrivedSub', { dest: G.stage.dest }),
       score: G.score, isNew,
-      meta: [['도착 보너스', '+' + bonus.toLocaleString()], ['남은 목숨', `${G.lives} / 3`], isNew ? ['이전 최고', Math.floor(prevBest).toLocaleString()] : ['최고 기록', Math.floor(G.best).toLocaleString()]],
-      primary: last ? '다음 바퀴 · 더 빠르게' : `다음 도시 · ${STAGES[G.stageIdx + 1].name}`,
+      meta: [[t('bonus'), '+' + bonus.toLocaleString()], [t('livesLeft'), `${G.lives} / 3`], isNew ? [t('prevBest'), Math.floor(prevBest).toLocaleString()] : [t('best'), Math.floor(G.best).toLocaleString()]],
+      primary: last ? t('nextLap') : t('nextCity', { city: STAGES[G.stageIdx + 1].name }),
       onPrimary: () => { if (last) { G.lap++; setStage(0); } else setStage(G.stageIdx + 1); },
     });
   }, 'result');
@@ -630,10 +634,10 @@ function gameOver() {
   hideTutorial(); cancel('stageTitle'); UI.stageTitle.classList.remove('show'); UI.combo.classList.remove('show');
   const pct = Math.round(clamp(G.dist / G.len, 0, 1) * 100);
   later(2.0, () => openResult({ // 추락 장면을 본 뒤 결과
-    kicker: `CRASHED · ${G.stage.name}`, title: 'GAME OVER', sub: `${G.stage.dest}까지 ${100 - pct}% 남았습니다`,
+    kicker: `CRASHED · ${G.stage.name}`, title: 'GAME OVER', sub: t('overSub', { dest: G.stage.dest, n: 100 - pct }),
     score: G.score, isNew,
-    meta: [['도달', `${G.stage.name} ${pct}%`], isNew ? ['이전 최고', Math.floor(prevBest).toLocaleString()] : ['최고 기록', Math.floor(G.best).toLocaleString()]],
-    primary: '다시 도전',
+    meta: [[t('reached'), `${G.stage.name} ${pct}%`], isNew ? [t('prevBest'), Math.floor(prevBest).toLocaleString()] : [t('best'), Math.floor(G.best).toLocaleString()]],
+    primary: t('retry'),
     onPrimary: () => { G.score = G.stageStartScore; setStage(G.stageIdx); },
   }), 'result');
 }
@@ -682,13 +686,34 @@ function renderLanding() {
 
 function syncMuteUI() {
   UI.muteBtn.setAttribute('aria-pressed', String(Sfx.muted));
-  UI.muteBtn.setAttribute('aria-label', Sfx.muted ? '소리 켜기 (M)' : '소리 끄기 (M)');
+  UI.muteBtn.setAttribute('aria-label', t(Sfx.muted ? 'unmuteAria' : 'muteAria'));
   UI.pauseMuteBtn.setAttribute('aria-pressed', String(Sfx.muted));
-  UI.pauseMuteBtn.textContent = Sfx.muted ? '소리 꺼짐' : '소리 켜짐';
+  UI.pauseMuteBtn.textContent = t(Sfx.muted ? 'soundOff' : 'soundOn');
 }
 function toggleMute() { Sfx.init(); Sfx.setMuted(!Sfx.muted); syncMuteUI(); }
 UI.muteBtn.addEventListener('click', toggleMute);
 UI.pauseMuteBtn.addEventListener('click', toggleMute);
+
+// ---------------------------------------------------------------- 언어 (기본 영어, ?lang= 경로·사용자 선택 우선)
+const langSels = [ui('langSel'), ui('pauseLangSel')];
+langSels.forEach(sel => {
+  sel.innerHTML = LANGS.map(l => `<option value="${l.code}" lang="${l.html}">${l.name}</option>`).join('');
+  sel.addEventListener('change', () => changeLang(sel.value));
+  sel.addEventListener('keydown', e => e.stopPropagation()); // 선택 중 SPACE/화살표가 게임 입력으로 새지 않게
+  sel.addEventListener('pointerdown', e => e.stopPropagation());
+});
+function changeLang(code) {
+  setLang(code, true);
+  refreshLangUI();
+  sel_blurLater();
+}
+function sel_blurLater() { setTimeout(() => { if (G.state === 'title') document.activeElement?.blur?.(); }, 0); }
+function refreshLangUI() { // 정적 문구 외에 지금 화면에 떠 있는 동적 문구도 다시 번역
+  langSels.forEach(sel => { sel.value = getLang(); });
+  syncMuteUI(); renderLives(false);
+  UI.progDest.textContent = G.stage.dest;
+  if (tutorialKey && UI.tutorial.classList.contains('show')) UI.tutorial.textContent = t(tutorialKey);
+}
 
 // ---------------------------------------------------------------- 입력 (키보드·마우스·터치 통합)
 // 누르고 있는 동안 = SPACE 가 눌려 있거나 화면에 닿은 포인터가 하나라도 있을 때
@@ -795,7 +820,7 @@ function update(dt) {
     if (k > .7 && UI.body.dataset.ui === 'launch') setUI('play'); // 랜딩 → HUD 로 자연스럽게
     if (k >= 1) {
       setState('fly'); G.prevHold = holding;
-      if (!G.tutorialDone) showTutorial('누르면 상승 · 떼면 하강');
+      if (!G.tutorialDone) showTutorial('howto');
     }
   } else if (G.state === 'fly') {
     // 누르고 있으면 추력 > 중력 → 상승, 떼면 하강 (물리는 기존 그대로)
@@ -931,7 +956,7 @@ function bootIfReady() {
   if (booted || !LOAD.tex || !LOAD.bg) return;
   const critical = ['car_player', `${STAGES[0].id}.jpg`, `ground_${STAGES[0].id}`];
   if (LOAD.failed.some(u => critical.some(c => u.includes(c)))) {
-    ui('loadMsg').textContent = '필수 자산을 불러오지 못했습니다.';
+    ui('loadMsg').textContent = t('assetFail');
     const b = ui('retryBtn'); b.hidden = false; b.onclick = () => location.reload();
     return;
   }
@@ -957,7 +982,10 @@ function loop(now) {
   if (!paused) update(dt);
   renderer.render(scene, camera);
 }
-syncMuteUI();
+const initialLang = detectLang();
+setLang(initialLang.lang, initialLang.source === 'url'); // URL 로 들어온 언어는 그대로 유지
+window.__srLang = initialLang;
+refreshLangUI();
 requestAnimationFrame(loop);
 window.__srBooted = true;
 // 디버그/테스트용 훅
