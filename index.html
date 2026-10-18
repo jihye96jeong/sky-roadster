@@ -2,7 +2,8 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07080b">
 <title>Sky Roadster</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
@@ -10,48 +11,123 @@
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 </head>
-<body>
-<div id="bg"></div>
-<canvas id="c"></canvas>
+<body data-ui="loading">
+<div id="bg" aria-hidden="true"></div>
+<canvas id="c" aria-hidden="true"></canvas>
+<div id="vignette" aria-hidden="true"></div>
 
-<!-- HUD -->
-<div id="hud" class="hidden">
-  <div class="hud-left"><div id="hudStage">STAGE 1</div><div id="hudCity">SEOUL</div></div>
-  <div class="hud-mid">
-    <div id="progress"><div id="progFill"></div><div id="progCar">▲</div></div>
-    <div id="hudDest">목적지</div>
-  </div>
-  <div class="hud-right"><div id="hudScore">0</div><div id="hudLives">❤❤❤</div></div>
+<!-- 로딩 / 실패 대체 화면 -->
+<div id="loading" class="screen" role="status" aria-live="polite">
+  <div class="wordmark">SKY <b>ROADSTER</b></div>
+  <div class="load-bar" aria-hidden="true"><i id="loadFill"></i></div>
+  <p id="loadMsg" class="load-msg">LOADING</p>
+  <button id="retryBtn" class="btn btn-primary" type="button" hidden>다시 시도</button>
 </div>
-<div id="hint" class="hidden"></div>
-<div id="banner" class="hidden"></div>
-<button id="muteBtn" title="소리 (M)">🔊</button>
 
-<!-- Title -->
-<div id="title" class="overlay">
-  <div class="panel">
-    <div class="logo">SKY<span>ROADSTER</span></div>
-    <div class="sub">꽉 막힌 도로는 이제 그만 — 하늘길 월드 투어</div>
-    <div id="cities"></div>
-    <button id="startBtn" class="btn">START ▶</button>
-    <div class="help">
-      <b>조작은 SPACE 하나</b> (모바일은 화면 터치) — 누르고 있으면 상승, 떼면 하강
+<!-- 랜딩: 같은 3D 장면 위에 텍스트만 얹는다 (차량을 가리지 않는 배치) -->
+<section id="landing" class="screen" aria-label="SKY ROADSTER 시작 화면">
+  <header class="topbar">
+    <div class="wordmark">SKY <b>ROADSTER</b></div>
+  </header>
+  <div class="hero-copy">
+    <p class="eyebrow">ONE-BUTTON FLIGHT</p>
+    <h1 class="title">SKY<br>ROADSTER</h1>
+    <i class="taillight" aria-hidden="true"></i>
+    <p class="tagline">도로가 막혔다면, 위로.</p>
+  </div>
+  <div class="hero-cta">
+    <button id="launchBtn" class="launch" type="button" aria-label="이륙하기 (SPACE)">
+      <span class="desk-only"><kbd>SPACE</kbd>를 눌러 이륙</span>
+      <span class="touch-only"><i class="press-dot" aria-hidden="true"></i>화면을 꾹 눌러 이륙</span>
+    </button>
+    <p class="howto">누르면 상승 · 떼면 하강</p>
+  </div>
+  <footer class="landing-foot">
+    <p id="bestLine" class="best-line"></p>
+    <p class="route" aria-label="도시 여정: 서울, 런던, 파리, 두바이, 시드니, 뉴욕">
+      <span>SEOUL</span><i></i><span class="mid">LONDON</span><i class="mid"></i><span class="mid">PARIS</span><i class="mid"></i><span class="mid">DUBAI</span><i class="mid"></i><span class="mid">SYDNEY</span><i></i><span>NEW YORK</span>
+    </p>
+  </footer>
+</section>
+
+<!-- 게임 HUD: 가운데는 비워둔다 -->
+<div id="hud">
+  <div class="hud-stage">
+    <span id="hudStage" class="eyebrow">STAGE 01 / 06</span>
+    <strong id="hudCity">SEOUL</strong>
+  </div>
+  <div class="hud-progress">
+    <div class="track" aria-hidden="true">
+      <i class="start"></i><i id="progFill" class="fill"></i><i class="goal"></i>
+      <span id="progMarker" class="marker"><svg viewBox="0 0 12 12"><path d="M2 1.5 L10.5 6 L2 10.5 L4.2 6 Z"/></svg></span>
     </div>
-    <div class="help">높이를 조절해 표지판·새·드론·열기구의 위나 아래로 통과 · 🟡 링은 보너스</div>
-    <div id="best" class="help"></div>
+    <div class="prog-labels"><span id="progPct">0%</span><span id="progDest">N서울타워</span></div>
+  </div>
+  <div class="hud-score">
+    <span class="eyebrow">SCORE</span>
+    <strong id="hudScore">0</strong>
+    <div id="hudLives" class="lives" role="img" aria-label="남은 목숨 3개"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+    <span id="combo" class="combo" aria-live="polite"></span>
   </div>
 </div>
 
-<!-- Stage clear / game over -->
-<div id="result" class="overlay hidden">
-  <div class="panel">
-    <div id="resTitle" class="logo small">STAGE CLEAR</div>
-    <div id="resText" class="sub"></div>
-    <button id="resBtn" class="btn">NEXT ▶</button>
-    <button id="resBtn2" class="btn ghost">타이틀로</button>
+<!-- 공용 컨트롤 (랜딩에서는 상단, 게임 중에는 하단) -->
+<div id="controls">
+  <button id="pauseBtn" class="icon-btn" type="button" aria-label="일시정지 (P)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="3.6" height="14" rx="1"/><rect x="13.9" y="5" width="3.6" height="14" rx="1"/></svg>
+  </button>
+  <button id="muteBtn" class="icon-btn" type="button" aria-label="소리 끄기 (M)" aria-pressed="false">
+    <svg class="ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path class="stroke" d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/></svg>
+    <svg class="ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path class="stroke" d="M15.5 9.5l5 5M20.5 9.5l-5 5"/></svg>
+  </button>
+</div>
+
+<!-- 상황 메시지: 용도별로 위치 분리 -->
+<div id="stageTitle" class="stage-title" aria-live="polite"></div>
+<p id="tutorial" class="tutorial" aria-live="polite"></p>
+<div id="popups" aria-hidden="true"><span></span><span></span><span></span></div>
+
+<!-- 일시정지 -->
+<div id="pause" class="screen modal" role="dialog" aria-modal="true" aria-labelledby="pauseTitle" hidden>
+  <div class="modal-body">
+    <p class="eyebrow">P · ESC</p>
+    <h2 id="pauseTitle" class="modal-title">PAUSED</h2>
+    <button id="resumeBtn" class="btn btn-primary" type="button">계속하기</button>
+    <button id="pauseMuteBtn" class="btn btn-line" type="button" aria-pressed="false">소리 켜짐</button>
+    <button id="pauseTitleBtn" class="btn btn-ghost" type="button">타이틀로</button>
   </div>
 </div>
 
+<!-- 결과 (게임오버 / 스테이지 클리어): 장면 위에 스크림만 깔아 이어지게 -->
+<div id="result" class="screen" role="dialog" aria-modal="true" aria-labelledby="resTitle" hidden>
+  <div class="result-body">
+    <p id="resKicker" class="eyebrow"></p>
+    <h2 id="resTitle" class="res-title"></h2>
+    <p id="resSub" class="res-sub"></p>
+    <div class="res-score">
+      <span class="eyebrow">SCORE</span>
+      <strong id="resScore">0</strong>
+      <span id="resNew" class="newbest" hidden>NEW BEST</span>
+    </div>
+    <dl id="resMeta" class="res-meta"></dl>
+    <div class="res-actions">
+      <button id="resPrimary" class="btn btn-primary" type="button"></button>
+      <button id="resSecondary" class="btn btn-ghost" type="button">타이틀로</button>
+    </div>
+    <p class="res-hint desk-only"><kbd>SPACE</kbd> 바로 진행</p>
+  </div>
+</div>
+
+<noscript><p class="noscript">이 게임은 JavaScript가 필요합니다.</p></noscript>
+<script>
+  // three.js(CDN) 로드 실패 등으로 게임이 시작되지 않으면 대체 안내 + 재시도
+  setTimeout(function () {
+    if (window.__srBooted) return;
+    var m = document.getElementById('loadMsg'), b = document.getElementById('retryBtn');
+    m.textContent = '게임을 불러오지 못했습니다. 네트워크를 확인해 주세요.'; b.hidden = false;
+    b.onclick = function () { location.reload(); };
+  }, 15000);
+</script>
 <script type="module" src="main.js"></script>
 </body>
 </html>
